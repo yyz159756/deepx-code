@@ -1,6 +1,9 @@
 package agent
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestClassifyStreamResult 覆盖 issue #169 的两类异常响应分类:
 // tool_call 被长度截断 / 空响应,以及正常情形不被误判。
@@ -49,11 +52,52 @@ func TestCompletionGateCap(t *testing.T) {
 	nudges := 0
 	got := 0
 	for range maxGateNudges + 3 {
-		if completionGate(true, nil, &nudges) != "" {
+		if completionGate(true, nil, &nudges, "") != "" {
 			got++
 		}
 	}
 	if got != maxGateNudges {
 		t.Fatalf("completionGate 应最多催 %d 次,实际 %d 次", maxGateNudges, got)
+	}
+}
+
+// TestHasCommitment 验证"承诺未执行"检测:执行承诺 → true;完成性收尾 / 普通陈述 → false。
+func TestHasCommitment(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{"承诺:先写", "好的,先写 config.py 的内容", true},
+		{"承诺:将创建", "我将创建 10 个文件", true},
+		{"承诺:接下来调用", "接下来调用 Write 写入", true},
+		{"承诺:准备执行", "我准备执行验证命令", true},
+		{"收尾:总结", "接下来我将总结一下结果", false},
+		{"收尾:已完成", "任务已完成,总结如下", false},
+		{"收尾:完毕", "就这些,完毕", false},
+		{"普通陈述", "这个文件的配置项有三个", false},
+		{"空文本", "", false},
+		{"承诺+收尾(收尾优先)", "先写 config.py,最后总结", false},
+	}
+	for _, c := range cases {
+		if got := hasCommitment(c.text); got != c.want {
+			t.Errorf("[%s] hasCommitment(%q) = %v, want %v", c.name, c.text, got, c.want)
+		}
+	}
+}
+
+// TestCompletionGateCommitment 验证 completionGate 对"承诺未执行"返回催继续提示。
+func TestCompletionGateCommitment(t *testing.T) {
+	var nudges int
+	got := completionGate(false, nil, &nudges, "我将先写 config.py")
+	if got == "" {
+		t.Fatalf("承诺未执行应催继续")
+	}
+	if !strings.Contains(got, "工具调用") {
+		t.Fatalf("提示应点明未调用工具, got=%q", got)
+	}
+	// 完成性收尾不催。
+	if got := completionGate(false, nil, &nudges, "任务已完成,总结如下"); got != "" {
+		t.Fatalf("完成性收尾不应催继续, got=%q", got)
 	}
 }

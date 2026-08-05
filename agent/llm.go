@@ -11,6 +11,7 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -861,8 +862,10 @@ func StartStream(
 
 			if len(toolCalls) == 0 {
 				// 完成度门禁:别把"这轮没工具调用"直接当成"任务完成"。
-				// 纯文本被长度截断、或还有未完成 todo 时,注入一条提示再跑一轮,催它继续。
-				if nudge := completionGate(truncated, lastTodo, &gateNudges); nudge != "" {
+				// 纯文本被长度截断、还有未完成 todo、或含"承诺未执行"措辞时,
+				// 注入一条提示再跑一轮,催它继续。text 传模型本条输出(含 thinking),
+				// 供承诺检测(见 hasCommitment)。
+				if nudge := completionGate(truncated, lastTodo, &gateNudges, assistantContent+"\n"+reasoning); nudge != "" {
 					convo = append(convo, ChatMessage{Role: "user", Content: nudge})
 					continue
 				}
@@ -1236,13 +1239,45 @@ var (
 		"请稍后重试,或用 /provider 换用更稳定的模型。")
 )
 
+// commitmentNudge:完成度门禁检测到"承诺未执行"时注入的提示 —— reasoning 模型长任务里,
+// thinking 起草完内容后,输出阶段可能只留下一句"将写 X"声明而不发工具调用(任务未做即结束)。
+const commitmentNudge = "(你上一条回复表示接下来要执行动作(如写/创建/调用工具等),但本轮没有发出任何工具调用,任务尚未执行。" +
+	"请继续:真正调用对应工具把它完成;若你其实已经完成、只是做了收尾总结,请明确说明'已完成'。)"
+
+// commitmentRe 匹配"面向未来动作的执行承诺"措辞:承诺引导词 + 执行动词。
+// 只匹配"承诺要做"的强信号,避免把普通陈述误判。
+var commitmentRe = regexp.MustCompile(`(将|先|接下来|下一步|准备|马上|待会)(?:要|去|给)?(?:继续)?(写|创建|生成|执行|调用|修改|更新|新建|开始|补充|添加|替换|删除)`)
+
+// completionRe 匹配"完成性收尾"措辞:命中说明这条回复是收尾/总结,不是执行承诺,
+// 完成度门禁不应催继续(防误报)。
+var completionRe = regexp.MustCompile(`(总结|收尾|完毕|交付|已完成|任务完成|全部完成|结束了|没有其他了)`)
+
+// hasCommitment 判断文本是否含"承诺未执行"信号:
+//   - 命中完成性收尾措辞 → 不算承诺(防误报:如"接下来我将总结结果");
+//   - 否则命中执行承诺措辞 → 算承诺。
+//
+// 权衡:同时含"先写 X…最后总结"时收尾优先(不催),宁可放行一次也不对收尾误催;
+// 若模型真未执行,用户可继续追问。
+func hasCommitment(text string) bool {
+	if text == "" {
+		return false
+	}
+	if completionRe.MatchString(text) {
+		return false
+	}
+	return commitmentRe.MatchString(text)
+}
+
 // completionGate 在"这轮没有工具调用"时决定是否还要继续:
 //   - 返回非空 = 应继续,内容是注入给模型的提示(催它接着干);
 //   - 返回 "" = 真的结束。
 //
-// 触发继续:① 上轮被截断(truncated,话没说完);② 还有未完成的 todo。
-// 死循环保护:连续催 maxGateNudges 次仍无进展就放行。纯对话/单步任务(没建 todo、未截断)照常一轮结束。
-func completionGate(truncated bool, todo []PlanItem, nudges *int) string {
+// 触发继续:① 上轮被截断(truncated,话没说完);② 还有未完成的 todo;
+//
+//	③ 本条回复含"承诺未执行"措辞(见 hasCommitment)。
+//
+// 死循环保护:连续催 maxGateNudges 次仍无进展就放行。纯对话/单步任务(没建 todo、未截断、无承诺)照常一轮结束。
+func completionGate(truncated bool, todo []PlanItem, nudges *int, text string) string {
 	if *nudges >= maxGateNudges {
 		return ""
 	}
@@ -1253,6 +1288,10 @@ func completionGate(truncated bool, todo []PlanItem, nudges *int) string {
 	if pending := countPendingTodos(todo); pending > 0 {
 		*nudges++
 		return fmt.Sprintf("(待办还有 %d 项未完成,任务尚未结束。请继续执行下一步并调用相应工具,不要提前收尾;若确实卡住无法继续,再说明原因。)", pending)
+	}
+	if hasCommitment(text) {
+		*nudges++
+		return commitmentNudge
 	}
 	return ""
 }
