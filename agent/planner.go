@@ -29,6 +29,11 @@ type PlanItem struct {
 	Status  PlanStatus `json:"-"`
 	Summary string     `json:"-"`
 	Phase   string     `json:"-"` // workflow 用:所属阶段名,渲染时据此分组(CreatePlan 留空 → 平铺)
+	// Progress 工具执行推进计数(完成度门禁用):含写类动作的 pending todo 项,
+	// 每次 Write/Update 成功推进一次。Progress>0 表示"模型已在执行",gate 不再催
+	// (countPendingTodos 只统计从未执行过的项,见 completionGate)。不改变 PlanItem 语义,
+	// 仅用于避免"模型已在工作但 todo 未更新 → gate 反复催"的误判。
+	Progress int `json:"-"`
 
 	// workflow 用:子 agent 计时(Go 侧计时,不入 journal、不影响 resume)。
 	StartedAt time.Time     `json:"-"` // 开跑时刻(start 时记)

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"deepx/agent/commitment"
 	"deepx/tools"
 	"encoding/json"
 	"errors"
@@ -11,11 +12,11 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -674,9 +675,11 @@ func StartStream(
 		}
 
 		// 完成度门禁状态:lastTodo = 最近一次 Todo 快照(判断是否还有未完成项);
+		// store = 承诺状态存储(模型"声明但未执行"的动作,见 commitment 包);
 		// gateNudges = 连续被门禁挡回的次数(死循环保护,见 completionGate)。
 		var lastTodo []PlanItem
 		gateNudges := 0
+		store := commitment.NewStore()
 
 		// lastFile = 本轮最近操作的文件路径,给 Update 漏 path 时兜底回填(issue #81)。
 		var lastFile string
@@ -862,12 +865,19 @@ func StartStream(
 
 			if len(toolCalls) == 0 {
 				// 完成度门禁:别把"这轮没工具调用"直接当成"任务完成"。
-				// 纯文本被长度截断、还有未完成 todo、或含"承诺未执行"措辞时,
-				// 注入一条提示再跑一轮,催它继续。text 传模型本条输出(含 thinking),
-				// 供承诺检测(见 hasCommitment)。
-				if nudge := completionGate(truncated, lastTodo, &gateNudges, assistantContent+"\n"+reasoning); nudge != "" {
+				// 纯文本被长度截断、还有未完成 todo、或存在未完成承诺时,注入提示催继续。
+				// 先检测本条回复(含 thinking 尾窗)是否有新承诺,录入 store;再由 gate 决定。
+				for _, c := range commitment.Detect(assistantContent + "\n" + tailReasoning(reasoning)) {
+					store.Add(c)
+				}
+				if nudge := completionGate(truncated, lastTodo, store, &gateNudges); nudge != "" {
 					convo = append(convo, ChatMessage{Role: "user", Content: nudge})
 					continue
+				}
+				// 放行:若仍有未完成承诺(达到 maxGateNudges 上限放行),标记 Cancelled,
+				// 承诺状态机不再追究(状态流转闭环:Pending→Executing→Completed/Failed/Cancelled)。
+				if store.Pending() {
+					store.CancelPending()
 				}
 				ch <- HistoryUpdateMsg{History: convo}
 				ch <- StreamDoneMsg{}
@@ -1125,6 +1135,20 @@ func StartStream(
 
 				if result.Success {
 					roundProgress = true
+					// 承诺验证:工具执行成功后,向承诺存储报告结果
+					// (只相信工具执行结果,不信任模型"说完成")。
+					switch tc.Function.Name {
+					case "Write", "Update", "Read", "Grep":
+						store.Verify(tc.Function.Name, toolArgPath(tc.Function.Arguments))
+					case "Bash":
+						store.Verify("Bash", "")
+					}
+					// todo 进度推进:Write/Update 成功 → 含写类动作的 pending todo 项
+					// Progress++(此后 gate 不再把它计入"待办未完成"催信号)。
+					advanceTodos(lastTodo, tc.Function.Name)
+				} else {
+					// 工具执行失败 → 对应动作的承诺置 Failed(不再等待),防止承诺永远 pending。
+					store.Fail(tc.Function.Name)
 				}
 				ch <- ToolCallResultMsg{
 					Name:    tc.Function.Name,
@@ -1239,35 +1263,48 @@ var (
 		"请稍后重试,或用 /provider 换用更稳定的模型。")
 )
 
-// commitmentNudge:完成度门禁检测到"承诺未执行"时注入的提示 —— reasoning 模型长任务里,
-// thinking 起草完内容后,输出阶段可能只留下一句"将写 X"声明而不发工具调用(任务未做即结束)。
-const commitmentNudge = "(你上一条回复表示接下来要执行动作(如写/创建/调用工具等),但本轮没有发出任何工具调用,任务尚未执行。" +
-	"请继续:真正调用对应工具把它完成;若你其实已经完成、只是做了收尾总结,请明确说明'已完成'。)"
-
-// commitmentRe 匹配"面向未来动作的执行承诺"措辞:承诺引导词 + 执行动词。
-// 中英双语:reasoning 模型在技术/工程场景常用英文思考与输出,只匹配中文会漏检
-// (实测:模型输出 "Now batch 3: ... Write all 10." 而无工具调用,中文正则未命中)。
-// 只匹配"承诺要做"的强信号,避免把普通陈述误判。
-var commitmentRe = regexp.MustCompile(`(?i)(将|先|接下来|下一步|准备|马上|待会)(?:要|去|给)?(?:继续)?(写|创建|生成|执行|调用|修改|更新|新建|开始|补充|添加|替换|删除)|(will|gonna|about to|let me|now|next|going to)[\s,;:]+(write|create|generate|execute|call|run|add|update|build|make|start)`)
-
-// completionRe 匹配"完成性收尾"措辞:命中说明这条回复是收尾/总结,不是执行承诺,
-// 完成度门禁不应催继续(防误报)。中英双语。
-var completionRe = regexp.MustCompile(`(总结|收尾|完毕|交付|已完成|任务完成|全部完成|结束了|没有其他了)|(?i)(summar|done|finished|complete|that's it|all set|wrap.?up|no more)`)
-
-// hasCommitment 判断文本是否含"承诺未执行"信号:
-//   - 命中完成性收尾措辞 → 不算承诺(防误报:如"接下来我将总结结果");
-//   - 否则命中执行承诺措辞 → 算承诺。
+// --- Agent Execution Reliability:Commitment State Machine ---
 //
-// 权衡:同时含"先写 X…最后总结"时收尾优先(不催),宁可放行一次也不对收尾误催;
-// 若模型真未执行,用户可继续追问。
-func hasCommitment(text string) bool {
-	if text == "" {
-		return false
+// 模型可能"声明要执行动作"但不发工具调用(尤其 reasoning 模型在 thinking 里起草后,
+// 输出阶段只留一句声明)。维护承诺状态机:模型提出意图 → Detector 生成候选 →
+// Commitment Store 接纳 → 工具执行验证 → 完成/失败/搁置。状态在 runtime(commitment 包),
+// 不进 LLM context,不影响 prefix cache / 工具 schema,不会产生 content_omitted / path-only 等模型污染。
+
+// commitmentNudge:完成度门禁检测到"承诺未执行"时注入的提示。
+const commitmentNudge = "(检测到你声明了一个尚未执行的操作(如写/创建/调用工具等),但本轮没有发出任何工具调用。" +
+	"请继续执行实际操作,不要只描述下一步;若你其实已经完成,请明确说明'已完成'。)"
+
+// commitmentEscalatedNudge:连续第二次因承诺未完成被催时,给具体执行引导 ——
+// 只声明不执行(或输出被截断导致工具调用未发出)会形成循环,温和提醒不够,需指出小步执行。
+const commitmentEscalatedNudge = "(已多次提醒:你声明了要执行操作,但一直只输出声明、没有发出工具调用(疑似单轮输出被截断)。" +
+	"请改为小步执行:每次只调用一个工具(如一次只 Write 一个文件),确认成功后再继续下一个;不要一次声明多个文件。" +
+	"若确实无法继续,请明确说明原因。)"
+
+// toolArgPath 从工具调用参数中提取 path(供承诺验证匹配目标)。
+func toolArgPath(argsJSON string) string {
+	var args map[string]any
+	if json.Unmarshal([]byte(argsJSON), &args) != nil {
+		return ""
 	}
-	if completionRe.MatchString(text) {
-		return false
+	p, _ := args["path"].(string)
+	return p
+}
+
+// CommitmentReasoningTailBytes:送入承诺检测的 reasoning 尾部窗口上限(可配置,随模型调整)。
+// thinking 里常含大量"假设/考虑/如果"等非承诺内容,全文送 detector 会污染状态;
+// 承诺声明多出现在 thinking 即将转为 final 输出的尾部,只取尾窗即可。
+const CommitmentReasoningTailBytes = 1200
+
+// tailReasoning 截取 reasoning 的尾部窗口(按 UTF-8 边界),供承诺检测使用。
+func tailReasoning(reasoning string) string {
+	if len(reasoning) <= CommitmentReasoningTailBytes {
+		return reasoning
 	}
-	return commitmentRe.MatchString(text)
+	b := []byte(reasoning)[len(reasoning)-CommitmentReasoningTailBytes:]
+	for len(b) > 0 && !utf8.Valid(b) {
+		b = b[1:]
+	}
+	return string(b)
 }
 
 // completionGate 在"这轮没有工具调用"时决定是否还要继续:
@@ -1276,37 +1313,77 @@ func hasCommitment(text string) bool {
 //
 // 触发继续:① 上轮被截断(truncated,话没说完);② 还有未完成的 todo;
 //
-//	③ 本条回复含"承诺未执行"措辞(见 hasCommitment)。
+//	③ 承诺状态机存在未完成承诺(commitment.Store)。
 //
 // 死循环保护:连续催 maxGateNudges 次仍无进展就放行。纯对话/单步任务(没建 todo、未截断、无承诺)照常一轮结束。
-func completionGate(truncated bool, todo []PlanItem, nudges *int, text string) string {
+func completionGate(truncated bool, todo []PlanItem, store *commitment.Store, nudges *int) string {
 	if *nudges >= maxGateNudges {
 		return ""
 	}
+	// 第二次起升级提示:温和提醒不够时,给出小步执行引导(针对"声明不执行/输出截断"循环)。
+	escalated := *nudges >= 1
 	if truncated {
 		*nudges++
 		return "(你上一条回复似乎被长度上限截断,没有输出完。请接着把没做完的部分继续做完——该调用工具就调用,不要停在这里总结。)"
 	}
+	// 信号优先级:truncated → commitment(执行事实)→ todo(模型规划)。
+	// commitment 由工具验证驱动、更可靠,todo 是模型自觉规划,故 commitment 先查。
+	if store.Pending() {
+		*nudges++
+		if escalated {
+			return commitmentEscalatedNudge
+		}
+		return commitmentNudge
+	}
 	if pending := countPendingTodos(todo); pending > 0 {
 		*nudges++
-		return fmt.Sprintf("(待办还有 %d 项未完成,任务尚未结束。请继续执行下一步并调用相应工具,不要提前收尾;若确实卡住无法继续,再说明原因。)", pending)
-	}
-	if hasCommitment(text) {
-		*nudges++
-		return commitmentNudge
+		if escalated {
+			return fmt.Sprintf("(已两次提醒:你有 %d 项待办从未开始执行,且一直没有发出工具调用,疑似只声明未执行或单轮输出被截断。"+
+				"请改为小步执行:每次只调用一个工具(如一次只 Write 一个文件),确认成功后再继续下一个;不要一次声明多个文件。)", pending)
+		}
+		return fmt.Sprintf("(待办还有 %d 项从未开始执行,任务尚未结束。请继续执行下一步并调用相应工具,不要提前收尾;若确实卡住无法继续,再说明原因。)", pending)
 	}
 	return ""
 }
 
-// countPendingTodos 统计 todo 里仍待办的项(pending/running);done/failed/blocked 不计入。
+// countPendingTodos 统计 todo 里仍未开始执行的项(pending/running 且 Progress==0)。
+// Progress>0 表示模型已在该项上有工具执行(见 advanceTodos),不再计入"待办未完成"
+// 的催信号,避免"模型已在工作但 todo 状态未更新 → gate 反复催"的误判。
+// done/failed/blocked 不计入。
 func countPendingTodos(todo []PlanItem) int {
 	n := 0
 	for _, it := range todo {
-		if it.Status == PlanStatusPending || it.Status == PlanStatusRunning {
+		if (it.Status == PlanStatusPending || it.Status == PlanStatusRunning) && it.Progress == 0 {
 			n++
 		}
 	}
 	return n
+}
+
+// advanceTodos 工具执行成功后,推进含写类动作的 pending todo 项的 Progress。
+// 启发式:标题含写类动词(写/创建/生成/新建/write/create/generate)→ Write/Update 成功时推进。
+// 自由文本无法精确匹配"写 6 个文件"完成与否,这里只用于标记"模型已在该项上执行",
+// 让 countPendingTodos 不再把它计入催信号;真正完成仍需模型更新 Status=done。
+func advanceTodos(todo []PlanItem, tool string) int {
+	if tool != "Write" && tool != "Update" {
+		return 0
+	}
+	advanced := 0
+	for i := range todo {
+		it := &todo[i]
+		if it.Status != PlanStatusPending && it.Status != PlanStatusRunning {
+			continue
+		}
+		low := strings.ToLower(it.Title)
+		if strings.Contains(it.Title, "写") || strings.Contains(it.Title, "创建") ||
+			strings.Contains(it.Title, "生成") || strings.Contains(it.Title, "新建") ||
+			strings.Contains(low, "write") || strings.Contains(low, "create") ||
+			strings.Contains(low, "generate") {
+			it.Progress++
+			advanced++
+		}
+	}
+	return advanced
 }
 
 // clampMaxTokens 把单次输出预算(max_tokens)夹进窗口:input + max_tokens 不得超过模型上限,

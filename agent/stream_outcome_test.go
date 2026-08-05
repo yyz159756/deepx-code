@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"deepx/agent/commitment"
 	"strings"
 	"testing"
 )
@@ -47,12 +48,41 @@ func TestClassifyStreamResult(t *testing.T) {
 	}
 }
 
+// TestCountPendingTodos_Progress 验证:Progress>0 的项不计入"待办未完成"催信号。
+func TestCountPendingTodos_Progress(t *testing.T) {
+	todo := []PlanItem{
+		{Title: "写 config.py", Status: PlanStatusPending, Progress: 0}, // 未开始 → 计
+		{Title: "创建 models.py", Status: PlanStatusPending, Progress: 2}, // 已执行 → 不计
+		{Title: "运行测试", Status: PlanStatusPending, Progress: 0},        // 未开始 → 计
+		{Title: "写 db.py", Status: PlanStatusDone, Progress: 0},         // done → 不计
+	}
+	if got := countPendingTodos(todo); got != 2 {
+		t.Fatalf("应统计 2 项从未执行的待办, got %d", got)
+	}
+	// Write 成功推进所有含写类词的 pending 项("写 config.py" + "创建 models.py")。
+	if n := advanceTodos(todo, "Write"); n != 2 {
+		t.Fatalf("Write 应推进写类 pending 项, got %d", n)
+	}
+	if todo[0].Progress != 1 || todo[1].Progress != 3 || todo[2].Progress != 0 {
+		t.Fatalf("应推进前两项, got %+v", todo[0:3])
+	}
+	if got := countPendingTodos(todo); got != 1 {
+		t.Fatalf("推进后应只剩'运行测试'未执行, got %d", got)
+	}
+	// Bash 不推进写类项。
+	if n := advanceTodos(todo, "Bash"); n != 0 {
+		t.Fatalf("Bash 不应推进写类 todo, got %d", n)
+	}
+}
+
 // TestCompletionGateCap 验证连续催继续不会无限循环:达到 maxGateNudges 后放行(返回空)。
 func TestCompletionGateCap(t *testing.T) {
-	nudges := 0
+	store := commitment.NewStore()
+	store.Add(&commitment.Commitment{Type: commitment.ActionWriteFile, Expected: 1})
+	var nudges int
 	got := 0
 	for range maxGateNudges + 3 {
-		if completionGate(true, nil, &nudges, "") != "" {
+		if completionGate(false, nil, store, &nudges) != "" {
 			got++
 		}
 	}
@@ -61,51 +91,58 @@ func TestCompletionGateCap(t *testing.T) {
 	}
 }
 
-// TestHasCommitment 验证"承诺未执行"检测:执行承诺 → true;完成性收尾 / 普通陈述 → false。
-func TestHasCommitment(t *testing.T) {
-	cases := []struct {
-		name string
-		text string
-		want bool
-	}{
-		{"承诺:先写", "好的,先写 config.py 的内容", true},
-		{"承诺:将创建", "我将创建 10 个文件", true},
-		{"承诺:接下来调用", "接下来调用 Write 写入", true},
-		{"承诺:准备执行", "我准备执行验证命令", true},
-		{"承诺:英文 will write", "Now I will write batch 3 files", true},
-		{"承诺:英文 let me create", "Let me create the remaining files", true},
-		{"承诺:英文 next run", "Next, run the verification command", true},
-		{"承诺:英文 gonna call", "I'm gonna call Write for each file", true},
-		{"收尾:总结", "接下来我将总结一下结果", false},
-		{"收尾:已完成", "任务已完成,总结如下", false},
-		{"收尾:完毕", "就这些,完毕", false},
-		{"收尾:英文 done", "All done, that's it", false},
-		{"收尾:英文 summary", "Here is the summary of results", false},
-		{"收尾:英文 finished", "Task finished, wrapping up", false},
-		{"普通陈述", "这个文件的配置项有三个", false},
-		{"普通英文陈述", "The file contains three config items", false},
-		{"空文本", "", false},
-		{"承诺+收尾(收尾优先)", "先写 config.py,最后总结", false},
+// TestCompletionGate_Commitment 覆盖承诺状态机核心场景:
+//   - 声明写文件但无工具调用 → 催继续;
+//   - 正常说明(无执行意图)→ 结束;
+//   - 工具执行推进承诺 → 达额后 gate 放行;
+//   - 恶意循环(反复声明不执行)→ maxGateNudges 次提醒后退出。
+func TestCompletionGate_Commitment(t *testing.T) {
+	// Test1:声明未执行 → 催继续。
+	store := commitment.NewStore()
+	for _, c := range commitment.Detect("Now batch 3: Write all 10 files.") {
+		store.Add(c)
 	}
-	for _, c := range cases {
-		if got := hasCommitment(c.text); got != c.want {
-			t.Errorf("[%s] hasCommitment(%q) = %v, want %v", c.name, c.text, got, c.want)
-		}
-	}
-}
-
-// TestCompletionGateCommitment 验证 completionGate 对"承诺未执行"返回催继续提示。
-func TestCompletionGateCommitment(t *testing.T) {
 	var nudges int
-	got := completionGate(false, nil, &nudges, "我将先写 config.py")
+	got := completionGate(false, nil, store, &nudges)
 	if got == "" {
-		t.Fatalf("承诺未执行应催继续")
+		t.Fatalf("声明未执行应催继续")
 	}
 	if !strings.Contains(got, "工具调用") {
 		t.Fatalf("提示应点明未调用工具, got=%q", got)
 	}
-	// 完成性收尾不催。
-	if got := completionGate(false, nil, &nudges, "任务已完成,总结如下"); got != "" {
-		t.Fatalf("完成性收尾不应催继续, got=%q", got)
+
+	// Test4:工具执行推进承诺 → 达额后 gate 放行。
+	store2 := commitment.NewStore()
+	store2.Add(&commitment.Commitment{Type: commitment.ActionWriteFile, Expected: 2})
+	store2.Verify("Write", "a.go")
+	if !store2.Pending() {
+		t.Fatalf("1/2 应仍 pending")
+	}
+	store2.Verify("Write", "b.go")
+	if store2.Pending() {
+		t.Fatalf("2/2 应完成,不再 pending")
+	}
+	var n2 int
+	if got := completionGate(false, nil, store2, &n2); got != "" {
+		t.Fatalf("承诺全部完成后应结束, got=%q", got)
+	}
+
+	// Test2:正常说明,无执行意图 → 结束。
+	if got := completionGate(false, nil, commitment.NewStore(), &nudges); got != "" {
+		t.Fatalf("正常说明应结束, got=%q", got)
+	}
+
+	// Test5:恶意循环 → 最多催 maxGateNudges 次后退出。
+	loop := commitment.NewStore()
+	loop.Add(&commitment.Commitment{Type: commitment.ActionWriteFile, Expected: 1})
+	var ln int
+	nudged := 0
+	for range maxGateNudges + 2 {
+		if completionGate(false, nil, loop, &ln) != "" {
+			nudged++
+		}
+	}
+	if nudged != maxGateNudges {
+		t.Fatalf("恶意循环应催 %d 次后退出,实际 %d", maxGateNudges, nudged)
 	}
 }
