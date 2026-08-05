@@ -48,30 +48,54 @@ func TestClassifyStreamResult(t *testing.T) {
 	}
 }
 
-// TestCountPendingTodos_Progress 验证:Progress>0 的项不计入"待办未完成"催信号。
-func TestCountPendingTodos_Progress(t *testing.T) {
+// TestCountBlockingTasks 验证:只统计 TodoAction 型、Progress==0 的项;
+// Verification/Review 型不阻塞 gate。
+func TestCountBlockingTasks(t *testing.T) {
 	todo := []PlanItem{
-		{Title: "写 config.py", Status: PlanStatusPending, Progress: 0}, // 未开始 → 计
-		{Title: "创建 models.py", Status: PlanStatusPending, Progress: 2}, // 已执行 → 不计
-		{Title: "运行测试", Status: PlanStatusPending, Progress: 0},        // 未开始 → 计
-		{Title: "写 db.py", Status: PlanStatusDone, Progress: 0},         // done → 不计
+		{Title: "写 config.py", Status: PlanStatusPending, Progress: 0, Type: TodoAction},        // 未开始 Action → 计
+		{Title: "创建 models.py", Status: PlanStatusPending, Progress: 2, Type: TodoAction},       // 已执行 → 不计
+		{Title: "运行测试", Status: PlanStatusPending, Progress: 0, Type: TodoAction},              // 未开始 → 计
+		{Title: "验证文件数", Status: PlanStatusPending, Progress: 0, Type: TodoVerification},      // 非 Action → 不计
+		{Title: "检查格式", Status: PlanStatusPending, Progress: 0, Type: TodoReview},              // 非 Action → 不计
+		{Title: "写 db.py", Status: PlanStatusDone, Progress: 0, Type: TodoAction},                // done → 不计
 	}
-	if got := countPendingTodos(todo); got != 2 {
-		t.Fatalf("应统计 2 项从未执行的待办, got %d", got)
+	if got := countBlockingTasks(todo); got != 2 {
+		t.Fatalf("应统计 2 项阻塞待办(仅 Action 未开始), got %d", got)
 	}
-	// Write 成功推进所有含写类词的 pending 项("写 config.py" + "创建 models.py")。
+	// Write 成功推进 Action 型含写词的项("写 config.py" + "创建 models.py")。
 	if n := advanceTodos(todo, "Write"); n != 2 {
-		t.Fatalf("Write 应推进写类 pending 项, got %d", n)
+		t.Fatalf("Write 应推进写类 Action 项, got %d", n)
 	}
-	if todo[0].Progress != 1 || todo[1].Progress != 3 || todo[2].Progress != 0 {
-		t.Fatalf("应推进前两项, got %+v", todo[0:3])
+	if todo[0].Progress != 1 || todo[1].Progress != 3 || todo[2].Progress != 0 || todo[3].Progress != 0 {
+		t.Fatalf("应只推进 Action 写类项, Verification/Review 不动, got %+v", todo[0:4])
 	}
-	if got := countPendingTodos(todo); got != 1 {
-		t.Fatalf("推进后应只剩'运行测试'未执行, got %d", got)
+	if got := countBlockingTasks(todo); got != 1 {
+		t.Fatalf("推进后应只剩'运行测试'阻塞, got %d", got)
 	}
 	// Bash 不推进写类项。
 	if n := advanceTodos(todo, "Bash"); n != 0 {
 		t.Fatalf("Bash 不应推进写类 todo, got %d", n)
+	}
+}
+
+// TestClassifyTodoType 验证启发式分类:验证/检查/格式 → Verification/Review;其余 → Action。
+func TestClassifyTodoType(t *testing.T) {
+	cases := []struct {
+		title string
+		want  TodoType
+	}{
+		{"写 batch 1-5", TodoAction},
+		{"生成配置文件", TodoAction},
+		{"验证文件数=30", TodoVerification},
+		{"校验所有文件 >600 字节", TodoVerification},
+		{"verify checksums", TodoVerification},
+		{"检查代码格式", TodoReview},
+		{"review 输出", TodoReview},
+	}
+	for _, c := range cases {
+		if got := classifyTodoType(c.title); got != c.want {
+			t.Errorf("[%s] classifyTodoType = %v, want %v", c.title, got, c.want)
+		}
 	}
 }
 

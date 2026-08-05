@@ -58,6 +58,16 @@ func (s *Store) Verify(tool, path string) bool {
 			advanced = true
 		}
 	}
+	// 验证类承诺由命令执行推进(Bash 常是验证载体,如 python check.py):
+	// 工具为 Bash 时,同时匹配 RunCommand 与 Verify 型承诺。
+	if tool == "Bash" {
+		for _, c := range s.items {
+			if c.Type == ActionVerify && c.Pending() {
+				c.markProgress()
+				advanced = true
+			}
+		}
+	}
 	return advanced
 }
 
@@ -71,7 +81,14 @@ func (s *Store) Fail(tool string) {
 	}
 }
 
-// CancelPending 完成度门禁放行(不再追究)时调用:把所有未完成承诺置 Cancelled。
+// AbandonPending 完成度门禁放行(不再追究)时调用:把所有未完成承诺置 Abandoned。
+func (s *Store) AbandonPending() {
+	for _, c := range s.items {
+		c.abandon()
+	}
+}
+
+// CancelPending 用户主动取消时调用(当前无触发路径,语义保留)。
 func (s *Store) CancelPending() {
 	for _, c := range s.items {
 		c.cancel()
