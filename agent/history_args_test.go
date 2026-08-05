@@ -102,7 +102,7 @@ func TestInvalidJSON_ReturnedAsIs(t *testing.T) {
 
 func TestRewrite_DoesNotMutateOriginal(t *testing.T) {
 	// 执行仍用原始 toolCalls:确认原始未被改动。
-	content := strings.Repeat("y", 600)
+	content := strings.Repeat("y", 4000)
 	raw := `{"path":"z.go","content":` + jsonStr(content) + `}`
 	orig := []ToolCall{mkTC("Write", raw)}
 	_ = rewriteToolCallArgsForHistory(orig)
@@ -112,7 +112,7 @@ func TestRewrite_DoesNotMutateOriginal(t *testing.T) {
 }
 
 func TestRewrite_MixedBatch(t *testing.T) {
-	bigWrite := `{"path":"big.go","content":` + jsonStr(strings.Repeat("a", 600)) + `}`
+	bigWrite := `{"path":"big.go","content":` + jsonStr(strings.Repeat("a", 4000)) + `}`
 	tcs := []ToolCall{
 		mkTC("Write", bigWrite),
 		mkTC("Update", `{"path":"u.go","old_string":"a","new_string":"b"}`),

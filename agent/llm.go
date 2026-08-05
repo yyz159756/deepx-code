@@ -1781,7 +1781,7 @@ func runExecutorGuarded(t *tools.Tool, args map[string]any) tools.ToolResult {
 // 超过则把 content 整体替换为文件引用描述(文件已实际写入,历史留引用即可、需要时 Read 取回),
 // 而不是截断出一段片段 —— 既避免完整文件内容撑爆上下文,也免去"按字节切多字节字符切出半个字"的麻烦。
 // 未超则原样保留:小内容占不了多少上下文,留着还能让模型看到自己刚写了什么。
-const maxInlineWriteContentBytes = 512
+const maxInlineWriteContentBytes = 3072
 
 // rewriteToolCallArgsForHistory 生成"存入历史用"的 toolCalls 副本:
 // 把 Write 的大 content 替换成文件引用描述,避免完整文件内容撑爆上下文。
