@@ -1245,12 +1245,14 @@ const commitmentNudge = "(你上一条回复表示接下来要执行动作(如�
 	"请继续:真正调用对应工具把它完成;若你其实已经完成、只是做了收尾总结,请明确说明'已完成'。)"
 
 // commitmentRe 匹配"面向未来动作的执行承诺"措辞:承诺引导词 + 执行动词。
+// 中英双语:reasoning 模型在技术/工程场景常用英文思考与输出,只匹配中文会漏检
+// (实测:模型输出 "Now batch 3: ... Write all 10." 而无工具调用,中文正则未命中)。
 // 只匹配"承诺要做"的强信号,避免把普通陈述误判。
-var commitmentRe = regexp.MustCompile(`(将|先|接下来|下一步|准备|马上|待会)(?:要|去|给)?(?:继续)?(写|创建|生成|执行|调用|修改|更新|新建|开始|补充|添加|替换|删除)`)
+var commitmentRe = regexp.MustCompile(`(?i)(将|先|接下来|下一步|准备|马上|待会)(?:要|去|给)?(?:继续)?(写|创建|生成|执行|调用|修改|更新|新建|开始|补充|添加|替换|删除)|(will|gonna|about to|let me|now|next|going to)[\s,;:]+(write|create|generate|execute|call|run|add|update|build|make|start)`)
 
 // completionRe 匹配"完成性收尾"措辞:命中说明这条回复是收尾/总结,不是执行承诺,
-// 完成度门禁不应催继续(防误报)。
-var completionRe = regexp.MustCompile(`(总结|收尾|完毕|交付|已完成|任务完成|全部完成|结束了|没有其他了)`)
+// 完成度门禁不应催继续(防误报)。中英双语。
+var completionRe = regexp.MustCompile(`(总结|收尾|完毕|交付|已完成|任务完成|全部完成|结束了|没有其他了)|(?i)(summar|done|finished|complete|that's it|all set|wrap.?up|no more)`)
 
 // hasCommitment 判断文本是否含"承诺未执行"信号:
 //   - 命中完成性收尾措辞 → 不算承诺(防误报:如"接下来我将总结结果");
