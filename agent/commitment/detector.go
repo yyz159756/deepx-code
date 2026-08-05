@@ -10,7 +10,7 @@ import (
 
 // commitmentRe:承诺引导词 + 执行动词。中英双语 —— reasoning 模型在技术场景常用
 // 英文思考与输出,只匹配中文会漏检(实测 "Now batch 3: Write all 10." 无工具调用)。
-var commitmentRe = regexp.MustCompile(`(?i)(将|先|接下来|下一步|准备|马上|待会|继续)(?:要|去|给)?(?:继续)?(写|创建|生成|执行|调用|修改|更新|新建|开始|补充|添加|替换|删除|搜索|查找|读取)|(will|gonna|about to|let me|going to)[\s,;:]+(write|create|generate|execute|call|run|add|update|build|make|start|search|find|read)|\b(now|next)[^.\n]{0,50}?\b(write|create|generate|execute|run|call|build|make|search|find|read)\b`)
+var commitmentRe = regexp.MustCompile(`(?i)(将|先|接下来|下一步|准备|马上|待会|继续)(?:要|去|给)?(?:继续)?(写|创建|生成|执行|调用|修改|更新|新建|开始|补充|添加|替换|删除|搜索|查找|读取|验证|校验|核实)|(will|gonna|about to|let me|going to)[\s,;:]+(write|create|generate|execute|call|run|add|update|build|make|start|search|find|read|verify|check|validate)|\b(now|next)[^.\n]{0,50}?\b(write|create|generate|execute|run|call|build|make|search|find|read|verify|check)\b`)
 
 // explanatoryRe:解释性措辞("说明/解释怎么做",而非要执行),命中则不算承诺,防误报
 // (如 "I will explain how to write files"、"下面说明文件生成方案")。
@@ -57,6 +57,8 @@ func typeFromZhAction(zh string) ActionType {
 		return ActionSearch
 	case "读取":
 		return ActionReadFile
+	case "验证", "校验", "核实":
+		return ActionVerify
 	default:
 		return ActionWriteFile
 	}
@@ -75,6 +77,8 @@ func typeFromEnAction(en string) ActionType {
 		return ActionSearch
 	case "read":
 		return ActionReadFile
+	case "verify", "check", "validate":
+		return ActionVerify
 	default:
 		return ActionWriteFile
 	}

@@ -18,6 +18,7 @@ const (
 	ActionRunCommand
 	ActionSearch
 	ActionReadFile
+	ActionVerify
 )
 
 // Status 承诺生命周期状态。
@@ -28,6 +29,7 @@ const (
 	Executing
 	Completed
 	Failed
+	Abandoned
 	Cancelled
 )
 
@@ -68,9 +70,16 @@ func (c *Commitment) fail() {
 	}
 }
 
-// cancel 完成度门禁放行(未继续执行、不再追究)时调用。
-// 注:此处的"取消"语义是"门禁放行后未兑现承诺被搁置"(类似 abandoned),非用户主动取消;
-// 用户主动取消与搁置的区分留待后续引入 Abandoned 状态时细化。
+// abandon 系统放行(达到 maxGateNudges,不再追究)时,把未完成承诺置 Abandoned。
+// 语义:系统搁置(未兑现但不再阻塞),区别于用户主动取消(Cancelled)。
+func (c *Commitment) abandon() {
+	if c.Pending() {
+		c.Status = Abandoned
+		c.UpdatedAt = time.Now().Unix()
+	}
+}
+
+// cancel 用户主动取消时调用(当前无触发路径,保留枚举与语义区分)。
 func (c *Commitment) cancel() {
 	if c.Pending() {
 		c.Status = Cancelled
@@ -107,4 +116,15 @@ func (s *Store) Pending() bool {
 		}
 	}
 	return false
+}
+
+// PendingList 返回所有未完成承诺(供放行时诊断/警告)。
+func (s *Store) PendingList() []*Commitment {
+	var out []*Commitment
+	for _, c := range s.items {
+		if c.Pending() {
+			out = append(out, c)
+		}
+	}
+	return out
 }

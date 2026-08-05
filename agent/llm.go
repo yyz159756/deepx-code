@@ -860,10 +860,15 @@ func StartStream(
 					convo = append(convo, ChatMessage{Role: "user", Content: nudge})
 					continue
 				}
-				// 放行:若仍有未完成承诺(达到 maxGateNudges 上限放行),标记 Cancelled,
-				// 承诺状态机不再追究(状态流转闭环:Pending→Executing→Completed/Failed/Cancelled)。
-				if store.Pending() {
-					store.CancelPending()
+				// 放行:若仍有未完成承诺(达到 maxGateNudges 上限放行),不静默"完成"——
+				// 注入 FinishedWithWarning 提示明确"存在未兑现的执行承诺",并将承诺标记
+				// Abandoned(系统搁置,区别于用户取消 Cancelled)。状态流转闭环:
+				// Pending→Executing→Completed/Failed/Abandoned/Cancelled。
+				if n := len(store.PendingList()); n > 0 {
+					convo = append(convo, ChatMessage{Role: "user", Content: fmt.Sprintf(
+						"(任务结束,但存在 %d 项未完成的执行承诺,已标记为搁置(Abandoned)。"+
+							"若任务确实未完,请明确说明还需做什么;否则视为完成。)", n)})
+					store.AbandonPending()
 				}
 				ch <- HistoryUpdateMsg{History: convo}
 				ch <- StreamDoneMsg{}
@@ -1302,24 +1307,28 @@ func completionGate(truncated bool, todo []PlanItem, store *commitment.Store, nu
 		}
 		return commitmentNudge
 	}
-	if pending := countPendingTodos(todo); pending > 0 {
+	if pending := countBlockingTasks(todo); pending > 0 {
 		*nudges++
 		if escalated {
-			return fmt.Sprintf("(已两次提醒:你有 %d 项待办从未开始执行,且一直没有发出工具调用,疑似只声明未执行或单轮输出被截断。"+
+			return fmt.Sprintf("(已两次提醒:你有 %d 项执行型待办从未开始执行,且一直没有发出工具调用,疑似只声明未执行或单轮输出被截断。"+
 				"请改为小步执行:每次只调用一个工具(如一次只 Write 一个文件),确认成功后再继续下一个;不要一次声明多个文件。)", pending)
 		}
-		return fmt.Sprintf("(待办还有 %d 项从未开始执行,任务尚未结束。请继续执行下一步并调用相应工具,不要提前收尾;若确实卡住无法继续,再说明原因。)", pending)
+		return fmt.Sprintf("(待办还有 %d 项执行型任务从未开始执行,任务尚未结束。请继续执行下一步并调用相应工具,不要提前收尾;若确实卡住无法继续,再说明原因。)", pending)
 	}
 	return ""
 }
 
-// countPendingTodos 统计 todo 里仍未开始执行的项(pending/running 且 Progress==0)。
-// Progress>0 表示模型已在该项上有工具执行(见 advanceTodos),不再计入"待办未完成"
-// 的催信号,避免"模型已在工作但 todo 状态未更新 → gate 反复催"的误判。
+// countBlockingTasks 统计"阻塞性待办":TodoAction 型、未开始执行(pending/running 且 Progress==0)的项。
+// 职责切分:只有执行型待办(Action)阻塞 agent 结束;Verification/Review 型不阻塞
+// (模型写完文件后,gate 不应被"验证文件数"这类 todo 反复打断)。
+// Progress>0 表示模型已在该项上有工具执行(见 advanceTodos),不再计入。
 // done/failed/blocked 不计入。
-func countPendingTodos(todo []PlanItem) int {
+func countBlockingTasks(todo []PlanItem) int {
 	n := 0
 	for _, it := range todo {
+		if it.Type != TodoAction {
+			continue
+		}
 		if (it.Status == PlanStatusPending || it.Status == PlanStatusRunning) && it.Progress == 0 {
 			n++
 		}
@@ -1327,10 +1336,11 @@ func countPendingTodos(todo []PlanItem) int {
 	return n
 }
 
-// advanceTodos 工具执行成功后,推进含写类动作的 pending todo 项的 Progress。
+// advanceTodos 工具执行成功后,推进 TodoAction 型、含写类动作的 pending 项的 Progress。
 // 启发式:标题含写类动词(写/创建/生成/新建/write/create/generate)→ Write/Update 成功时推进。
-// 自由文本无法精确匹配"写 6 个文件"完成与否,这里只用于标记"模型已在该项上执行",
-// 让 countPendingTodos 不再把它计入催信号;真正完成仍需模型更新 Status=done。
+// 只处理 TodoAction 型(Verification/Review 不靠写文件推进,且不阻塞 gate);
+// 不做"推最后一个 pending"兜底 —— 那会为验证类 todo 制造假证据。
+// Progress 只标记"模型已在该项上执行",真正完成仍需模型更新 Status=done。
 func advanceTodos(todo []PlanItem, tool string) int {
 	if tool != "Write" && tool != "Update" {
 		return 0
@@ -1338,6 +1348,9 @@ func advanceTodos(todo []PlanItem, tool string) int {
 	advanced := 0
 	for i := range todo {
 		it := &todo[i]
+		if it.Type != TodoAction {
+			continue
+		}
 		if it.Status != PlanStatusPending && it.Status != PlanStatusRunning {
 			continue
 		}

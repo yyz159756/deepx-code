@@ -79,7 +79,7 @@ func TestMatches(t *testing.T) {
 	}
 }
 
-// TestStatusFlow 状态完整流转:Pending→Executing→Completed;失败→Failed;放行→Cancelled。
+// TestStatusFlow 状态完整流转:Pending→Executing→Completed;失败→Failed;系统放行→Abandoned。
 func TestStatusFlow(t *testing.T) {
 	s := NewStore()
 	c := &Commitment{Type: ActionWriteFile, Expected: 2}
@@ -107,22 +107,50 @@ func TestStatusFlow(t *testing.T) {
 		t.Fatalf("Failed 承诺不应计入 pending")
 	}
 
-	// 放行 → Cancelled
+	// 系统放行 → Abandoned(区别于用户取消 Cancelled)
 	c3 := &Commitment{Type: ActionSearch, Expected: 1}
 	s.Add(c3)
+	if got := len(s.PendingList()); got != 1 {
+		t.Fatalf("PendingList 应列出 1 项, got %d", got)
+	}
+	s.AbandonPending()
+	if c3.Status != Abandoned {
+		t.Fatalf("系统放行应 Abandoned, got %v", c3.Status)
+	}
+	// 用户取消路径(Cancelled)仍保留语义。
+	c4 := &Commitment{Type: ActionReadFile, Expected: 1}
+	s.Add(c4)
 	s.CancelPending()
-	if c3.Status != Cancelled {
-		t.Fatalf("放行应 Cancelled, got %v", c3.Status)
+	if c4.Status != Cancelled {
+		t.Fatalf("用户取消应 Cancelled, got %v", c4.Status)
 	}
 }
 
-// TestDetect_MoreActions 补全动作映射:搜索/读取。
+// TestDetect_MoreActions 补全动作映射:搜索/读取/验证。
 func TestDetect_MoreActions(t *testing.T) {
 	if cs := Detect("接下来搜索配置文件"); len(cs) != 1 || cs[0].Type != ActionSearch {
 		t.Fatalf("'搜索'应映射 ActionSearch, got %+v", cs)
 	}
 	if cs := Detect("I will read the config file"); len(cs) != 1 || cs[0].Type != ActionReadFile {
 		t.Fatalf("'read'应映射 ActionReadFile, got %+v", cs)
+	}
+	if cs := Detect("接下来验证文件数量"); len(cs) != 1 || cs[0].Type != ActionVerify {
+		t.Fatalf("'验证'应映射 ActionVerify, got %+v", cs)
+	}
+	if cs := Detect("I will verify the checksums"); len(cs) != 1 || cs[0].Type != ActionVerify {
+		t.Fatalf("'verify'应映射 ActionVerify, got %+v", cs)
+	}
+}
+
+// TestVerifyBashAdvancesVerify 验证:Bash 成功推进 ActionVerify 型承诺。
+func TestVerifyBashAdvancesVerify(t *testing.T) {
+	s := NewStore()
+	s.Add(&Commitment{Type: ActionVerify, Expected: 1})
+	if !s.Verify("Bash", "") {
+		t.Fatalf("Bash 应推进 ActionVerify 承诺")
+	}
+	if s.Pending() {
+		t.Fatalf("Verify 承诺应已完成")
 	}
 }
 
