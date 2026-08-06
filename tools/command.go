@@ -186,6 +186,7 @@ func runForegroundWithAutoHandoff(command, cwd string, timeoutSec int) ToolResul
 			return ToolResult{
 				Output:          out + fmt.Sprintf("\n超时(%ds)", timeoutSec),
 				Success:         false,
+				Error:           fmt.Sprintf("command failed: 超时(%ds)", timeoutSec),
 				FailureCategory: FailureCategoryTimeout,
 				FailureHint:     "命令超时。检查命令是否在等待输入 / 是否应使用 run_in_background 跑长任务,不要原样重试。",
 			}
@@ -203,6 +204,7 @@ func formatForegroundResult(out string, err error) ToolResult {
 		return ToolResult{
 			Output:          out + fmt.Sprintf("[exit] %v", err),
 			Success:         false,
+			Error:           "command failed: " + err.Error(), // 摘要:exit status N / signal;诊断(输出)留在 Output
 			FailureCategory: FailureCategoryExecution,
 			FailureHint:     "命令执行失败。检查命令与输出中的错误信息,对症修正后再重试,不要原样复读同一命令。",
 		}

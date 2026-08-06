@@ -1,8 +1,8 @@
 # agent / 工具失败恢复
 
-## Requirements
+## MODIFIED Requirements
 
-### Requirement: 工具失败携带类别、摘要与提示
+### Requirement: 工具失败携带类别与提示
 The agent tool system SHALL provide a machine-readable failure category, a failure summary, and an optional human-readable recovery hint whenever a tool call fails, so the agent can classify and recover without parsing error prose.
 
 #### Scenario: 工具失败返回类别、摘要与原始观察

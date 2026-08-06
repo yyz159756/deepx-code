@@ -42,6 +42,12 @@ type ToolResult struct {
 	Output  string
 	Success bool
 
+	// Error is a short failure summary.
+	// It describes WHY execution failed.
+	// Diagnostic details should remain in Output.
+	// (禁止反模式:Error=完整 stderr 且 Output 清空 —— 诊断信息是模型需要的观察,不因结构化而丢弃)
+	Error string
+
 	// FailureCategory 失败时的机器可读类别(见 failure.go 常量);成功时通常为空。
 	// Agent 据此分类并生成恢复引导,不必解析错误文本。
 	FailureCategory FailureCategory

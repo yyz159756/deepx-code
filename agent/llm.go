@@ -1112,6 +1112,10 @@ func StartStream(
 					result = executeTool(tc, mode, &lastFile)
 				}
 
+				// 兼容旧工具:失败未带 Error 时,Output 复制为 Error(不清空 Output)。
+				// 统一在入口做,覆盖 executeTool / Explore / OCR 等所有结果路径。
+				result = NormalizeToolResult(result)
+
 				if result.Success {
 					roundProgress = true
 					// 成功 = 该工具+路径的假设被验证,清除失败计数,避免后续失败被误判升级。
@@ -1126,9 +1130,10 @@ func StartStream(
 					Role:       "tool",
 					ToolCallID: tc.ID,
 					Name:       tc.Function.Name,
+					// 渲染:成功 = Output;失败 = Error + "\n" + Output(原因+诊断,见 RenderToolResultContent)。
 					// 本轮合计上限:单条已被 clampToolOutput 限到 96KB,这里再按「本轮所有工具结果合计」收口,
 					// 防止一轮并发多条把上下文顶爆(issue #135)。只截入历史的内容,UI(上方 ToolCallResultMsg)仍展示完整结果。
-					Content: clampTurnToolOutput(tc.Function.Name, result.Output, &turnToolBytes),
+					Content: clampTurnToolOutput(tc.Function.Name, RenderToolResultContent(result), &turnToolBytes),
 				})
 				// 失败恢复:注入 user-role 引导(不要原样重试,先诊断);同指纹连续失败分级升级,
 				// 达到上限时终止循环(仿 errTruncatedToolLoop 的退出方式)。

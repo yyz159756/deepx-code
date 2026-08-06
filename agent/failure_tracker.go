@@ -219,3 +219,30 @@ func bashExecSub(command string) string {
 	}
 	return toks[0] + " " + toks[1]
 }
+
+// NormalizeToolResult 兼容旧工具:失败且未提供 Error 时,把 Output 复制为 Error(不清空 Output)。
+// 已知取舍:legacy fallback 会使 Error 与 Output 内容重复 —— 可接受;新迁移工具应提供简洁 Error 摘要。
+// 在 executeTool 返回后调用(agent 入口,非 tool 层)。
+func NormalizeToolResult(r tools.ToolResult) tools.ToolResult {
+	if !r.Success && r.Error == "" && r.Output != "" {
+		r.Error = r.Output
+	}
+	return r
+}
+
+// RenderToolResultContent 渲染工具结果进模型上下文的文本。
+// 成功 = Output(observation);失败 = Error + "\n" + Output(原因 + 诊断证据,两者都要,
+// 不能只给 Error 丢诊断,也不能只给 Output 丢结构化原因)。
+func RenderToolResultContent(r tools.ToolResult) string {
+	if r.Success {
+		return r.Output
+	}
+	switch {
+	case r.Error != "" && r.Output != "":
+		return r.Error + "\n" + r.Output
+	case r.Error != "":
+		return r.Error
+	default:
+		return r.Output
+	}
+}
