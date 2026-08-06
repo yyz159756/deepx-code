@@ -295,6 +295,18 @@ func extractMainArg(name, argsJSON string) string {
 		return ""
 	case "Bash":
 		return strVal(args["command"])
+	case "Git":
+		// args 是数组,join 成空格显示(如 "status --short")
+		if arr, ok := args["args"].([]any); ok {
+			parts := make([]string, 0, len(arr))
+			for _, a := range arr {
+				if s, ok := a.(string); ok {
+					parts = append(parts, s)
+				}
+			}
+			return strings.Join(parts, " ")
+		}
+		return ""
 	case "SwitchModel":
 		return strVal(args["reason"])
 	case "UpdatePlanStatus":
