@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"deepx/tools"
 )
@@ -32,8 +33,12 @@ type failureTracker struct {
 	counts    map[string]int    // fingerprint → 累计失败次数
 	lastNudge map[string]int    // fingerprint → 已注入的最高级别(1/2/3),同级别不重复注入
 	ids       map[string]string // fingerprint → 最近一次失败的 FailureID(事件身份,每次失败新 ID)
-	counter   int               // stream 局部递增,生成 f_001 / f_002 …
 }
+
+// failureIDSeq 是进程级单调递增的 FailureID 计数器:跨 StartStream/跨轮唯一。
+// 会话级事件身份 —— 同一次 agent 运行内任何失败 ID 不重复(重启后新会话从新序列开始,
+// 旧会话历史里的 ID 只存在于旧文本,与当前 UI 无冲突)。
+var failureIDSeq atomic.Int64
 
 func newFailureTracker() *failureTracker {
 	return &failureTracker{
@@ -106,11 +111,11 @@ func (ft *failureTracker) clearByTool(tc ToolCall) {
 	}
 }
 
-// bump 自增指纹失败计数并返回当前值;同时为本次失败事件生成新 FailureID(每次失败一个新事件)。
+// bump 自增指纹失败计数并返回当前值;同时为本次失败事件生成新 FailureID(每次失败一个新事件,
+// 进程级唯一,跨 StartStream 不重复)。
 func (ft *failureTracker) bump(fp string) int {
 	ft.counts[fp]++
-	ft.counter++
-	ft.ids[fp] = fmt.Sprintf("f_%03d", ft.counter)
+	ft.ids[fp] = fmt.Sprintf("f_%03d", failureIDSeq.Add(1))
 	return ft.counts[fp]
 }
 

@@ -68,7 +68,7 @@ The agent SHALL assign a unique FailureID to each tool failure event (stream-loc
 
 #### Scenario: 每次失败生成唯一 ID
 - **WHEN** a tool call fails
-- **THEN** the agent SHALL generate a stream-local unique FailureID (e.g. `f_001`) for that failure event
+- **THEN** the agent SHALL generate a process-wide unique FailureID (monotonic across streams, e.g. `f_001`) for that failure event
 - **AND** consecutive failures of the same fingerprint SHALL get distinct IDs (each failure is a distinct event)
 - **AND** the ID SHALL be associated with the failure fingerprint in the tracker
 
