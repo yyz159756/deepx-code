@@ -138,3 +138,23 @@ func TestFailureID_SuccessClears(t *testing.T) {
 		t.Fatalf("清除后新失败应生成新 ID,got %q", id2)
 	}
 }
+
+
+// 跨 StartStream(不同 tracker 实例)失败 ID 也不重复(进程级原子计数器,会话级唯一)。
+func TestFailureID_UniqueAcrossTrackers(t *testing.T) {
+	tc := failureToolCall("Update", `{"path":"e.go","old_string":"旧","new_string":"新"}`)
+	res := tools.ToolResult{Output: "未找到", Success: false, FailureCategory: tools.FailureCategoryNotFound}
+
+	ft1 := newFailureTracker() // 模拟 StartStream A
+	_, idA, _ := handleToolFailure(tc, res, ft1)
+
+	ft2 := newFailureTracker() // 模拟 StartStream B(新轮)
+	_, idB, _ := handleToolFailure(tc, res, ft2)
+
+	if idA == "" || idB == "" {
+		t.Fatalf("ID 不应为空: %q %q", idA, idB)
+	}
+	if idA == idB {
+		t.Fatalf("跨 stream 失败 ID 不应重复: %q == %q", idA, idB)
+	}
+}
