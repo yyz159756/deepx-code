@@ -231,18 +231,12 @@ func NormalizeToolResult(r tools.ToolResult) tools.ToolResult {
 }
 
 // RenderToolResultContent 渲染工具结果进模型上下文的文本。
-// 成功 = Output(observation);失败 = Error + "\n" + Output(原因 + 诊断证据,两者都要,
-// 不能只给 Error 丢诊断,也不能只给 Output 丢结构化原因)。
+// 成功 = Output(observation);失败 = Failure Protocol(<tool_failure> 协议,
+// status/category/summary/recovery/diagnostic —— 见 RenderToolFailureProtocol)。
+// 协议化让模型明确区分"失败事件"与"普通 observation",降低失败诊断被当作执行模板复用的风险。
 func RenderToolResultContent(r tools.ToolResult) string {
 	if r.Success {
 		return r.Output
 	}
-	switch {
-	case r.Error != "" && r.Output != "":
-		return r.Error + "\n" + r.Output
-	case r.Error != "":
-		return r.Error
-	default:
-		return r.Output
-	}
+	return RenderToolFailureProtocol(r)
 }
