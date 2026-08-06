@@ -106,6 +106,9 @@ type ToolCallResultMsg struct { // 工具调用返回
 	Name    string
 	Output  string
 	Success bool
+	// FailureID 失败事件的唯一身份(stream 局部递增,如 f_001);成功时为空。
+	// 供 UI/debug 引用某次具体失败,不进模型上下文(模型不消费)。
+	FailureID string
 }
 
 // ModelSwitchMsg 通知 UI 本轮起手选择的模型。每轮仅在开头发一次,本轮不再变化。
@@ -1121,16 +1124,24 @@ func StartStream(
 					// 成功 = 该工具+路径的假设被验证,清除失败计数,避免后续失败被误判升级。
 					ft.clearByTool(tc)
 				}
+				// 失败处理提前:handleToolFailure 生成 FailureID(事件身份),供 ToolCallResultMsg 携带
+				// (UI/debug 引用);nudge 注入在 tool 消息回填后(模型下一轮看到)。
+				var failNudge, failID string
+				var failAbort bool
+				if !result.Success {
+					failNudge, failID, failAbort = handleToolFailure(tc, result, ft)
+				}
 				ch <- ToolCallResultMsg{
-					Name:    tc.Function.Name,
-					Output:  result.Output,
-					Success: result.Success,
+					Name:      tc.Function.Name,
+					Output:    result.Output,
+					Success:   result.Success,
+					FailureID: failID,
 				}
 				convo = append(convo, ChatMessage{
 					Role:       "tool",
 					ToolCallID: tc.ID,
 					Name:       tc.Function.Name,
-					// 渲染:成功 = Output;失败 = Error + "\n" + Output(原因+诊断,见 RenderToolResultContent)。
+					// 渲染:成功 = Output;失败 = Failure Protocol(<tool_failure>,见 RenderToolResultContent)。
 					// 本轮合计上限:单条已被 clampToolOutput 限到 96KB,这里再按「本轮所有工具结果合计」收口,
 					// 防止一轮并发多条把上下文顶爆(issue #135)。只截入历史的内容,UI(上方 ToolCallResultMsg)仍展示完整结果。
 					Content: clampTurnToolOutput(tc.Function.Name, RenderToolResultContent(result), &turnToolBytes),
@@ -1138,11 +1149,11 @@ func StartStream(
 				// 失败恢复:注入 user-role 引导(不要原样重试,先诊断);同指纹连续失败分级升级,
 				// 达到上限时终止循环(仿 errTruncatedToolLoop 的退出方式)。
 				if !result.Success {
-					if nudge, abort := handleToolFailure(tc, result, ft); abort {
+					if failAbort {
 						ch <- StreamErrMsg{errRepeatedToolFailureLoop}
 						return
-					} else if nudge != "" {
-						convo = append(convo, ChatMessage{Role: "user", Content: nudge})
+					} else if failNudge != "" {
+						convo = append(convo, ChatMessage{Role: "user", Content: failNudge})
 					}
 				}
 			}

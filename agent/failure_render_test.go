@@ -44,10 +44,18 @@ func TestRenderToolResultContent(t *testing.T) {
 		FailureHint:     "请先 Read 文件确认实际内容",
 	}
 	got := RenderToolResultContent(fail)
-	for _, want := range []string{"<tool_failure>", "status:", "FAILED", "category:", "not_found", "summary:", "在文件中未找到 old_string", "recovery:", "请先 Read 文件确认实际内容", "diagnostic:", "错误: 该文本不在文件中", "</tool_failure>"} {
+	for _, want := range []string{
+		"<tool_failure>", "protocol_version: 1", "status: failed", "category:", "not_found",
+		"retryable: false", "recovery_action: inspect_before_retry",
+		"summary:", "在文件中未找到 old_string", "diagnostic:", "错误: 该文本不在文件中", "</tool_failure>",
+	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("失败渲染应含 %q,got:\n%s", want, got)
 		}
+	}
+	// FailureHint 不进协议(进 nudge),协议里不应有自由文本 hint
+	if strings.Contains(got, "请先 Read 文件确认实际内容") {
+		t.Fatalf("FailureHint 不应进协议(进 nudge),got:\n%s", got)
 	}
 }
 
@@ -88,14 +96,5 @@ func TestRenderToolFailureProtocol_DiagnosticTruncated(t *testing.T) {
 	}
 	if strings.Count(got, "x") != failureDiagnosticMaxLen {
 		t.Fatalf("diagnostic 应截断到 %d,got %d 个 x", failureDiagnosticMaxLen, strings.Count(got, "x"))
-	}
-}
-
-// Phase 3:recovery 空值兜底(无 hint → category 默认动作)。
-func TestRenderToolFailureProtocol_RecoveryFallback(t *testing.T) {
-	r := tools.ToolResult{Success: false, Error: "boom", FailureCategory: tools.FailureCategoryNotFound}
-	got := RenderToolFailureProtocol(r)
-	if !strings.Contains(got, "Read") {
-		t.Fatalf("recovery 空时应给 not_found 默认动作(含 Read),got:\n%s", got)
 	}
 }

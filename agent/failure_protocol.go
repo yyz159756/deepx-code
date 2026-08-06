@@ -6,24 +6,27 @@ import (
 	"deepx/tools"
 )
 
-// Failure Protocol:失败结果在模型上下文中的协议化表达。
-// 目的:降低失败诊断文本被模型当作可执行模式复用的风险 —— 用明确的失败事件标记
-// (<tool_failure>) 区分"失败事件"与"普通 observation"。表达层隔离:不改 ToolResult。
+// Failure Protocol v2:失败结果在模型上下文中的协议化表达(模型侧)。
+// 目的:降低失败诊断文本被模型当作可执行模式复用的风险,并让模型明确
+// 失败状态(status)、类别(category)、是否存在后续恢复可能性(retryable)、
+// 恢复方向(recovery_action)。纯渲染层:不做业务判断(无 if category 分支),
+// 不修改 ToolResult(截断只在渲染副本上),不依赖 tracker。
 const (
+	failureProtocolVersion = 1
 	// failureSummaryMaxLen:summary 截断上限(旧工具 Error=Output 可能很长)。
 	failureSummaryMaxLen = 200
 	// failureDiagnosticMaxLen:diagnostic 截断上限(防编译日志/堆栈/stderr 污染上下文)。
 	failureDiagnosticMaxLen = 4000
 )
 
-// RenderToolFailureProtocol 把失败 ToolResult 渲染为 <tool_failure> 协议。
-// 字段:status(FAILED)/ category / summary(Error,≤200)/ recovery(FailureHint 或
-// category 默认动作)/ diagnostic(Output,≤4000,截断带标记)。成功结果不走此协议。
+// RenderToolFailureProtocol 把失败 ToolResult 渲染为 <tool_failure> 协议文本。
+// 字段顺序固定(protocol_version/status/category/retryable/recovery_action/summary/diagnostic):
+// token 稳定、缓存友好、测试易写、后续 diff 明确。成功结果不走此协议。
 func RenderToolFailureProtocol(r tools.ToolResult) string {
 	summary := truncateUTF8(r.Error, failureSummaryMaxLen)
-	recovery := r.FailureHint
-	if recovery == "" {
-		recovery = defaultFailureAction(r.FailureCategory)
+	action := string(GetRecoveryAction(r.FailureCategory))
+	if action == "" {
+		action = string(RecoveryAbort)
 	}
 	diag := truncateUTF8(r.Output, failureDiagnosticMaxLen)
 	truncated := ""
@@ -31,23 +34,27 @@ func RenderToolFailureProtocol(r tools.ToolResult) string {
 		truncated = "\ndiagnostic truncated: true"
 	}
 	return fmt.Sprintf(`<tool_failure>
-
-status:
-FAILED
-
-category:
-%s
+protocol_version: %d
+status: failed
+category: %s
+retryable: %t
+recovery_action: %s
 
 summary:
-%s
-
-recovery:
 %s
 
 diagnostic:
 %s%s
 
-</tool_failure>`, r.FailureCategory, summary, recovery, diag, truncated)
+</tool_failure>`,
+		failureProtocolVersion,
+		r.FailureCategory,
+		IsRetryable(r.FailureCategory),
+		action,
+		summary,
+		diag,
+		truncated,
+	)
 }
 
 // truncateUTF8 按字节截断到 max,超限加 … 且不截断多字节字符中间。

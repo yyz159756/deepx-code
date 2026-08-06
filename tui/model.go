@@ -2702,7 +2702,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(out) > 200 {
 				out = out[:200] + "…"
 			}
-			m.chatContent.Append("  ✗ " + msg.Name + " 失败: " + out + "\n")
+			// 失败提示带事件 ID(FailureID):UI/debug 可引用某次具体失败;无 ID 时省略。
+			idSuffix := ""
+			if msg.FailureID != "" {
+				idSuffix = " (" + msg.FailureID + ")"
+			}
+			m.chatContent.Append("  ✗ " + msg.Name + " 失败" + idSuffix + ": " + out + "\n")
 		}
 		m.currentReply.Reset()
 		m.refreshViewport()

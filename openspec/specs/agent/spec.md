@@ -51,13 +51,34 @@ The agent SHALL render failed tool results in model context as a structured fail
 
 #### Scenario: 失败结果渲染为协议
 - **WHEN** a tool call returns `Success:false`
-- **THEN** the tool message in context SHALL be rendered as `<tool_failure>` protocol containing: `status: FAILED`, `category`, `summary`, `recovery`, and `diagnostic`
+- **THEN** the tool message in context SHALL be rendered as `<tool_failure>` protocol containing, in fixed order: `protocol_version`, `status: failed`, `category`, `retryable`, `recovery_action`, `summary`, and `diagnostic`
+- **AND** `retryable` SHALL be derived from the failure category (timeout/network → true; others → false), meaning "further recovery may be possible", NOT "allowed to immediately retry the identical call" (behavior control remains with the nudge/tracker)
+- **AND** `recovery_action` SHALL be a stable enum from the canonical set (inspect_before_retry / modify_arguments / retry_with_backoff / request_permission / abort) mapped by category
 - **AND** `summary` SHALL be the failure summary (from `Error`), truncated to at most 200 chars
 - **AND** `diagnostic` SHALL carry the raw diagnostic observation (from `Output`), truncated to at most 4000 chars with a `diagnostic truncated: true` marker when truncated
-- **AND** `recovery` SHALL be the tool hint, or a category-default action when the hint is empty
+- **AND** the tool hint (natural language) SHALL NOT be embedded in the protocol (it belongs to the recovery nudge)
 - **AND** a successful tool result SHALL remain plain `Output` (no protocol wrapper)
 
 #### Scenario: 协议与恢复引导并存
 - **WHEN** a tool call fails
 - **THEN** the failure protocol message (what happened) SHALL be followed by the existing recovery nudge (what to do next)
 - **AND** the failure tracker escalation (Phase 1) SHALL remain unchanged
+### Requirement: 失败事件唯一身份(FailureID)
+The agent SHALL assign a unique FailureID to each tool failure event (stream-local, monotonic), associate it with the failure fingerprint, and expose it to the UI through the tool-result event message — without entering ToolResult, the failure protocol rendering, or model recovery logic.
+
+#### Scenario: 每次失败生成唯一 ID
+- **WHEN** a tool call fails
+- **THEN** the agent SHALL generate a stream-local unique FailureID (e.g. `f_001`) for that failure event
+- **AND** consecutive failures of the same fingerprint SHALL get distinct IDs (each failure is a distinct event)
+- **AND** the ID SHALL be associated with the failure fingerprint in the tracker
+
+#### Scenario: ID 不进入工具结果与模型恢复
+- **WHEN** a tool call fails
+- **THEN** the FailureID SHALL NOT be added to the `ToolResult` structure
+- **AND** the FailureID SHALL NOT be rendered inside the `<tool_failure>` protocol (model does not consume it)
+- **AND** model recovery logic (category/hint/tracker escalation) SHALL NOT depend on the ID
+
+#### Scenario: UI 通过事件通道获取 ID
+- **WHEN** a tool call fails and the agent emits the tool-result event to the UI
+- **THEN** the event message SHALL carry the FailureID (when available)
+- **AND** the failure display in the UI MAY show the ID alongside the failure marker
