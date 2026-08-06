@@ -8,6 +8,7 @@ import (
 )
 
 // Phase 2:NormalizeToolResult 兼容 + RenderToolResultContent 语义隔离。
+// Phase 3:失败分支渲染为 Failure Protocol(<tool_failure>)。
 
 func TestNormalizeToolResult_LegacyFallback(t *testing.T) {
 	// 旧工具:失败只有 Output → Error=Output,Output 保留(不清空)
@@ -29,28 +30,72 @@ func TestNormalizeToolResult_LegacyFallback(t *testing.T) {
 }
 
 func TestRenderToolResultContent(t *testing.T) {
-	cases := []struct {
-		name string
-		r    tools.ToolResult
-		want string
-	}{
-		{"成功=Output", tools.ToolResult{Success: true, Output: "已写入 a.go"}, "已写入 a.go"},
-		{"失败 Error+Output=拼接", tools.ToolResult{Success: false, Error: "exit status 1", Output: "stack trace"}, "exit status 1\nstack trace"},
-		{"失败只 Error", tools.ToolResult{Success: false, Error: "超时"}, "超时"},
-		{"失败只 Output(兜底)", tools.ToolResult{Success: false, Output: "boom"}, "boom"},
+	// 成功 = Output 原样
+	ok := tools.ToolResult{Success: true, Output: "已写入 a.go"}
+	if got := RenderToolResultContent(ok); got != "已写入 a.go" {
+		t.Fatalf("成功应原样 Output,got %q", got)
 	}
-	for _, c := range cases {
-		if got := RenderToolResultContent(c.r); got != c.want {
-			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+	// 失败 = Failure Protocol
+	fail := tools.ToolResult{
+		Success:         false,
+		Error:           "在文件中未找到 old_string",
+		Output:          "错误: 该文本不在文件中",
+		FailureCategory: tools.FailureCategoryNotFound,
+		FailureHint:     "请先 Read 文件确认实际内容",
+	}
+	got := RenderToolResultContent(fail)
+	for _, want := range []string{"<tool_failure>", "status:", "FAILED", "category:", "not_found", "summary:", "在文件中未找到 old_string", "recovery:", "请先 Read 文件确认实际内容", "diagnostic:", "错误: 该文本不在文件中", "</tool_failure>"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("失败渲染应含 %q,got:\n%s", want, got)
 		}
 	}
 }
 
-// 不回归保证:失败时 Error(原因)与 Output(诊断)都不丢失。
+// 不回归保证:失败时 Error(原因)与 Output(诊断)都不丢失(在协议字段内)。
 func TestRenderToolResultContent_NoInfoLoss(t *testing.T) {
 	r := tools.ToolResult{Success: false, Error: "exit status 1", Output: "stack trace"}
 	got := RenderToolResultContent(r)
 	if !strings.Contains(got, "exit status 1") || !strings.Contains(got, "stack trace") {
 		t.Fatalf("失败渲染必须含原因与诊断,got %q", got)
+	}
+}
+
+// Phase 3:summary 截断 200。
+func TestRenderToolFailureProtocol_SummaryTruncated(t *testing.T) {
+	long := strings.Repeat("e", 500)
+	r := tools.ToolResult{Success: false, Error: long, Output: "d"}
+	got := RenderToolFailureProtocol(r)
+	// summary 行内容截断(找到 "summary:\n" 后到下一字段)
+	idx := strings.Index(got, "summary:\n") + len("summary:\n")
+	end := strings.Index(got[idx:], "\n\n")
+	sum := got[idx : idx+end]
+	body := strings.TrimSuffix(sum, "…") // 截断标记不计入内容长度
+	if len(body) > failureSummaryMaxLen {
+		t.Fatalf("summary 内容应 ≤%d,got %d", failureSummaryMaxLen, len(body))
+	}
+	if !strings.Contains(sum, "…") {
+		t.Fatal("summary 截断应带 …")
+	}
+}
+
+// Phase 3:diagnostic 截断 4000 + truncated 标记。
+func TestRenderToolFailureProtocol_DiagnosticTruncated(t *testing.T) {
+	long := strings.Repeat("x", 5000)
+	r := tools.ToolResult{Success: false, Error: "boom", Output: long}
+	got := RenderToolFailureProtocol(r)
+	if !strings.Contains(got, "diagnostic truncated: true") {
+		t.Fatal("diagnostic 超限应带 truncated 标记")
+	}
+	if strings.Count(got, "x") != failureDiagnosticMaxLen {
+		t.Fatalf("diagnostic 应截断到 %d,got %d 个 x", failureDiagnosticMaxLen, strings.Count(got, "x"))
+	}
+}
+
+// Phase 3:recovery 空值兜底(无 hint → category 默认动作)。
+func TestRenderToolFailureProtocol_RecoveryFallback(t *testing.T) {
+	r := tools.ToolResult{Success: false, Error: "boom", FailureCategory: tools.FailureCategoryNotFound}
+	got := RenderToolFailureProtocol(r)
+	if !strings.Contains(got, "Read") {
+		t.Fatalf("recovery 空时应给 not_found 默认动作(含 Read),got:\n%s", got)
 	}
 }

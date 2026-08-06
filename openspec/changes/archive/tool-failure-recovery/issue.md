@@ -22,15 +22,75 @@
 
 1. `ToolResult` 增加 `FailureCategory`(如 not_found、execution_error 等)+ `FailureHint`(中文恢复建议);Tool 只报告事实。**恢复策略由 agent 层统一处理,避免每个 tool 自己实现失败循环逻辑。**
 2. Agent 在 `Success:false` 后增加恢复引导机制(可复用现有 nudge 通道,如 truncatedToolNudge),**引导内容应包含"不要原样重试"以及下一步诊断动作**;分类优先工具提供的类别,旧工具用错误文本关键词 fallback(中英)
-3. 可按工具类型建立失败指纹(如 Update: `tool+path+hash(old_string)`;Write: `tool+path`;Bash: `normalize(exec+subcommand)+category`),连续失败分级(**阈值可配置**,如 1 标准引导 → 2 soft → 3 hard(禁止同参数)→ 5 终止上报 UI,仿 `errTruncatedToolLoop`)。未来工具(Browser/Search 等)可再适配自己的指纹
+3. 可按工具类型建立失败指纹(例如 Update/Write/Bash 分别基于目标资源、参数和错误类别生成),避免不同失败任务的失败状态互相污染;连续失败分级(**阈值可配置**,如 1 标准引导 → 2 soft → 3 hard(禁止同参数)→ 5 终止上报 UI,仿 `errTruncatedToolLoop`)。参考实现使用:Update `tool+path+hash(old_string)` / Write `tool+path` / Bash `normalize(exec+subcommand)+category`——具体指纹设计可按上游偏好调整
 4. 同指纹成功执行后清除 tracker 状态
 
 **方向二:失败状态结构化**
 
-5. `ToolResult` 增加 `Error` 字段(**失败摘要**,如 `command failed: exit status 1`);`Output` 保留诊断 observation——**避免将诊断输出全部迁移到 Error 字段,导致 agent 丢失必要上下文**
+5. `ToolResult` 增加 `Error` 字段(**失败摘要**,如 `command failed: exit status 1`);`Output` 保留诊断 observation——**避免将诊断输出全部迁移到 Error 字段,导致 agent 丢失必要上下文**。对于 Bash 等执行型工具:`Error` 保存执行状态摘要(exit code),`Output` 保留 stdout/stderr 等诊断信息
 6. 模型上下文渲染:失败 = `Error + "\n" + Output`(原因 + 诊断,函数化 `RenderToolResultContent`)
 7. 兼容转换 `NormalizeToolResult`(agent 入口):旧工具 `Error=Output` 且 Output 保留(仅作为兼容 fallback,新迁移工具应提供独立 Error 摘要)
 8. 工具迁移:Update/Bash/Write 失败路径补 `Error` 摘要
+
+**方向三:失败结果与模型可执行上下文隔离**
+方向二解决字段语义分离(Error/Output 内部结构),方向三进一步解决**这些字段进入模型上下文后的表达方式**(渲染给模型看到的格式)。
+
+9. 区分工具失败状态信息与诊断 observation,降低失败诊断文本被模型当作可执行模式复用的风险。当前失败结果直接以文本形式进入上下文:
+
+```
+role=tool
+old_string not found
+```
+
+模型无法区分:这是工具执行失败的诊断信息,还是工具返回的正常 observation。可增加结构化失败标记或统一包装格式:
+
+```
+<tool_failure>
+category: not_found
+summary: old_string not found
+
+diagnostic:
+...
+</tool_failure>
+```
+
+帮助模型区分:该结果表示上一次工具调用未成功;诊断文本用于分析失败原因,而不是成功执行结果。
+
+10. 根据实际上下文窗口和模型行为,可进一步考虑将失败诊断信息与核心恢复信号分离:
+- 恢复决策依赖:`FailureCategory` + `FailureHint`
+- 调试分析依赖:`Output` 中的详细诊断
+
+避免长诊断输出占据主要上下文,影响 agent 后续规划。
+
+### 三个方向的关系
+
+三个方向分别解决不同层面的问题:
+
+- **方向一:控制 agent 行为**——失败后如何恢复、防止重复失败调用
+- **方向二:规范工具结果协议**——明确失败原因与诊断输出的职责、提供稳定数据结构
+- **方向三:优化模型上下文表达**——降低失败诊断文本被误认为正常 observation 或执行模式的风险,为未来 tool protocol 演进提供基础
+
+```
+失败调用
+    |
+    +-- Agent不知道下一步怎么办
+    |       |
+    |       +-- Phase 1
+    |           FailureHint + nudge + tracker
+    |
+    +-- Tool结果没有结构
+    |       |
+    |       +-- Phase 2
+    |           Error / Output 分离
+    |
+    +-- Tool消息格式污染模型上下文
+            |
+            +-- Phase 3(长期)
+                Tool protocol redesign
+                (可能影响 prefix cache)
+```
+
+
 
 ## 期望行为(验收标准)
 
