@@ -27,6 +27,10 @@ func goPreciseCallEdges(root string) ([]Edge, bool) {
 			packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
 		Dir:  root,
 		Fset: fset,
+		// 加载 _test.go:默认 false 会导致测试函数的调用边缺失(callees 空,
+		// 定义/引用却来自语法层快图而有 —— 测试文件盲区)。Tests:true 生成
+		// test variant 包,测试函数调用被测函数的边才能建出来。
+		Tests: true,
 		// 只读:绝不让 go list 修改用户的 go.mod/go.sum(覆盖用户可能设的 GOFLAGS=-mod=mod);
 		// 依赖缺失时它会报错而非改文件 → 我们 hadErr 分支回退语法层,安全降级。
 		BuildFlags: []string{"-mod=readonly"},
