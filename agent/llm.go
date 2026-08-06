@@ -514,6 +514,8 @@ func coreSystemPrompt(workspace, skillCatalog string) string {
 # 工具使用
 - 改代码前先 inspect 相关文件、理解上下文,改动最小化。编辑时保持现有风格,不顺手做不相关的重构,默认保持向后兼容(除非用户明确要求)。
 - 查代码符号(函数/类型/方法)的定义、调用关系、实现者、继承请优先用 CodeGraph工具(更准、不误命中注释/字符串)。
+- **执行 Python 代码 / 文本处理 / 数据计算优先用 Python 工具**(代码经 stdin 不经 shell,引号/中文/管道原样执行);Windows 下涉及引号、编码、管道、删除的复杂命令同样优先 Python 工具,不要先用 Bash 报错再换(见 bash-traps skill)。
+- **必须用 Bash 的场景**(Python 工具无此能力):①常驻/后台进程(dev server、watch 等,需 run_in_background + BashOutput/KillBash 句柄管理)②流式输出(tail -f 等)③交互式 stdin④依赖 shell 语义的命令(export/重定向/子 shell 环境/作业控制)。其余情况优先 Python 工具。
 - 需要用户在**有限、明确的选项**里做选择或拍板时(需求确认、技术选型、A/B 方案、是否包含某功能等),**必须调用 AskUser 工具弹窗让用户勾选**,可一次问多道;不要把选项写成文字列表让用户敲字回复。开放性、需要自由表达的问题才用文字提问。
 - 用户表达**持久性**偏好/约定时(「以后都…」「记住…」「不要再…」「我习惯…」「这个项目用…」),调用 **Remember** 工具写入 AGENTS.md(跨项目的习惯=global,本仓库的约定=project),长期生效;一次性指令不要记。
 
