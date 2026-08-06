@@ -290,11 +290,7 @@ var Tools = []Tool{
 			"\n⚠️ **不要用 shell 的 `&` 或 `nohup` 在前台模式里自己后台化**(如 `./server &`):那样救不了," +
 			"Go 仍会等子进程继承的输出管道关闭而卡死到 timeout,还会留孤儿;要后台跑就用 `run_in_background: true`。" +
 			"\n前台模式(默认)只用来跑会主动退出的命令:构建 / 单测 / lint / grep / git / ls / 安装依赖 / 一次性脚本。" +
-			"\n\n**Windows 环境注意**(实测踩过的坑):①sh 的初始 cwd 常失效(pwd/ls 报找不到路径),先显式 `cd /d` 或经 `cmd /c` 包装;" +
-			"②`cmd /c \"set X=... && prog\"` 嵌套引号会被 cmd 解析规则破坏(变量带尾随空格、值失效、命令被拆),复杂命令写 .bat 文件或用 PowerShell;" +
-			"③无 sed、findstr 中文匹配会 GBK 乱码,文本过滤用 PowerShell Select-String 或 Python;" +
-			"④`rmdir /s /q` / `del /s` 会被沙箱启发式拦截,递归删除用 PowerShell `Remove-Item -Recurse -Force`;" +
-			"⑤`setx VAR \"value\"` 会把引号存进值,值无空格就不加引号。",
+			"\nWindows 下的命令执行坑(cwd 失效 / 引号嵌套 / 编码 / 沙箱拦截等)见 bash-traps skill,执行前先加载。",
 		Parameters: ToolParam{
 			Type: "object",
 			Properties: map[string]PropDef{
