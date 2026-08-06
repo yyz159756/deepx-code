@@ -2,7 +2,9 @@ package tools
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"deepx/codegraph"
@@ -28,10 +30,15 @@ func SetCodeGraphRoot(root string) {
 }
 
 // CodeGraphInvalidate 让图谱缓存失效,下次查询重建。Write/Update 改了文件后调用。
+// 顺带清空全部 root 局部索引缓存(简单全清,临时索引重建成本可接受)。
 func CodeGraphInvalidate() {
 	if cgIndex != nil {
 		cgIndex.Invalidate()
 	}
+	cgExtraMu.Lock()
+	cgExtra = map[string]*codegraph.Index{}
+	cgExtraOrder = nil
+	cgExtraMu.Unlock()
 }
 
 // CodeGraphStatus 返回图谱状态标识串(idle/loading/ready/stale),供状态栏渲染。
@@ -44,17 +51,86 @@ func CodeGraphStatus() string {
 
 const cgDefaultMax = 60
 
+// cgExtra 缓存按 root 指定的局部索引:workspace 是多项目容器时,模型用 root 参数把
+// 查询限定到单个项目(如 CodeGraph(root="...\\code\\deepx-code\\code"))。NewIndex 惰性、
+// 不触发构建,缓存只保存句柄;FIFO 淘汰,上限 cgExtraMax 防多 root 占内存。
+var (
+	cgExtraMu    sync.Mutex
+	cgExtra      = map[string]*codegraph.Index{}
+	cgExtraOrder []string
+)
+
+const cgExtraMax = 4
+
+// cgIndexFor 返回查询要用的索引:root 非空 → 该 root 的局部索引(按绝对路径缓存);
+// root 为空 → 全局 cgIndex。返回 second 非 nil 表示索引不可用(错误结果,不执行查询)。
+func cgIndexFor(root string) (*codegraph.Index, *ToolResult) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		if cgIndex == nil {
+			return nil, &ToolResult{Output: "代码图谱未启用(workspace 未初始化)", Success: false}
+		}
+		return cgIndex, nil
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, &ToolResult{Output: fmt.Sprintf("root 路径错误: %v", err), Success: false}
+	}
+	cgExtraMu.Lock()
+	defer cgExtraMu.Unlock()
+	if ix, ok := cgExtra[abs]; ok {
+		return ix, nil
+	}
+	ix := codegraph.NewIndex(abs)
+	if len(cgExtraOrder) >= cgExtraMax {
+		delete(cgExtra, cgExtraOrder[0])
+		cgExtraOrder = cgExtraOrder[1:]
+	}
+	cgExtra[abs] = ix
+	cgExtraOrder = append(cgExtraOrder, abs)
+	return ix, nil
+}
+
+// cgWarning 返回索引对应根目录"非单项目"时的提示前缀;单项目根返回空。
+// 纯函数,测试只验证它、不触发 CodeGraph 真实构建(构建会跑 go list,在测试/非项目
+// 目录可能挂起并遗留孤儿进程 —— 见 codegraph_multi_test.go 注释)。
+func cgWarning(ix *codegraph.Index) string {
+	if ix != nil && !ix.Disabled() && !ix.IsProject() {
+		return "⚠️ 该目录未检测到项目标志(非单项目根),代码图谱可能不全或构建失败;" +
+			"查符号可改用 Grep,或确认 root 指向含 .git / go.mod / package.json 的项目目录。\n\n"
+	}
+	return ""
+}
+
+// cgNonProjectWarning 全局 workspace 根的警告(旧接口,测试/调用方沿用)。
+func cgNonProjectWarning() string { return cgWarning(cgIndex) }
+
 // CodeGraph 是工具入口:基于符号图谱做代码导航。op 见 cgOps / 工具描述。
 //
 //	symbols def refs outline imports | callers callees | implementers subtypes supertypes | impact | reindex
+//
+// 支持可选 root 参数:多项目 workspace 下用它对单个项目目录建图查询(path 相对该 root);
+// 缺省用当前 workspace 根。非单项目根时给结果加前缀警告,引导降级 Grep / 纠正 root。
+// 不阻断查询(散目录仍可惰性构建),只做提示。
 func CodeGraph(args map[string]any) ToolResult {
 	cgCalls.Add(1)
-	if cgIndex == nil {
-		return ToolResult{Output: "代码图谱未启用(workspace 未初始化)", Success: false}
+	root, _ := args["root"].(string)
+	ix, errRes := cgIndexFor(root)
+	if errRes != nil {
+		return *errRes
 	}
-	if cgIndex.Disabled() {
-		return ToolResult{Output: fmt.Sprintf("代码图谱已禁用:%s。请在具体的项目目录(含 .git/go.mod/package.json 等)中启动,而非主目录或系统根目录。", cgIndex.Reason()), Success: false}
+	if ix.Disabled() {
+		return ToolResult{Output: fmt.Sprintf("代码图谱已禁用:%s。请在具体的项目目录(含 .git/go.mod/package.json 等)中启动,或让 root 指向它。", ix.Reason()), Success: false}
 	}
+	res := codeGraphExec(ix, args)
+	if w := cgWarning(ix); w != "" {
+		res.Output = w + res.Output
+	}
+	return res
+}
+
+// codeGraphExec 在指定索引上执行查询(全局 cgIndex 或 root 局部索引)。
+func codeGraphExec(ix *codegraph.Index, args map[string]any) ToolResult {
 	op, _ := args["op"].(string)
 	op = strings.TrimSpace(strings.ToLower(op))
 	name, _ := args["name"].(string)
@@ -69,14 +145,14 @@ func CodeGraph(args map[string]any) ToolResult {
 
 	switch op {
 	case "reindex":
-		n, err := cgIndex.Reindex()
+		n, err := ix.Reindex()
 		if err != nil {
 			return ToolResult{Output: fmt.Sprintf("重建索引失败: %v", err), Success: false}
 		}
 		return ToolResult{Output: fmt.Sprintf("已重建索引,共 %d 个符号。", n), Success: true}
 	}
 
-	g, err := cgIndex.Graph()
+	g, err := ix.Graph()
 	if err != nil {
 		return ToolResult{Output: fmt.Sprintf("构建索引失败: %v", err), Success: false}
 	}

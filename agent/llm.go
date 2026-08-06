@@ -513,7 +513,7 @@ func coreSystemPrompt(workspace, skillCatalog string) string {
 
 # 工具使用
 - 改代码前先 inspect 相关文件、理解上下文,改动最小化。编辑时保持现有风格,不顺手做不相关的重构,默认保持向后兼容(除非用户明确要求)。
-- 查代码符号(函数/类型/方法)的定义、调用关系、实现者、继承请优先用 CodeGraph工具(更准、不误命中注释/字符串)。
+- 查代码符号(函数/类型/方法)的定义、调用关系、实现者、继承优先用 CodeGraph 工具(更准、不误命中注释/字符串;仅当当前工作目录是单项目根——含 .git / go.mod / package.json 等标志;多项目/散目录时图谱不可靠,改用 Grep)。
 - 读文件用 Read 工具(支持 offset/limit 按需读,大文件只读需要的部分、省 token),不要用 Bash cat 或 Python 读全文。
 - **执行 Python 代码 / 文本处理 / 数据计算优先用 Python 工具**(代码经 stdin 不经 shell,引号/中文/管道原样执行);Windows 下涉及引号、编码、管道、删除的复杂命令同样优先 Python 工具,不要先用 Bash 报错再换(见 bash-traps skill)。
 - **必须用 Bash 的场景**(Python 工具无此能力):①常驻/后台进程(dev server、watch 等,需 run_in_background + BashOutput/KillBash 句柄管理)②流式输出(tail -f 等)③交互式 stdin④依赖 shell 语义的命令(export/重定向/子 shell 环境/作业控制)。其余情况优先 Python 工具。
