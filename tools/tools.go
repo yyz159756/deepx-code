@@ -309,6 +309,26 @@ var Tools = []Tool{
 		ReadOnly: false,
 	},
 	{
+		Name: "Python",
+		Description: "执行 Python 代码(子进程方式,代码经 stdin 传给 `python -`,**不经 shell** —— " +
+			"代码里的引号/反引号/$/反斜杠原样生效,不会被 cmd/bash 解析破坏)。" +
+			"参数 code 传完整 Python 源码,可含任意换行与引号;可选 cwd 指定工作目录、timeout 指定超时(默认 60s)。" +
+			"适合数据计算 / 文本处理 / 一次性脚本等纯 Python 任务;" +
+			"需要安装依赖、启动常驻服务或组合 shell 命令时改用 Bash。" +
+			"\n注意:依赖沙箱模式执行(docker 在容器内 / native 按 OS 隔离),Python 解释器缺失或超时会明确报错。",
+		Parameters: ToolParam{
+			Type: "object",
+			Properties: map[string]PropDef{
+				"code":    {Type: "string", Description: "要执行的 Python 源码(完整代码,经 stdin 传给解释器,不经 shell)"},
+				"cwd":     {Type: "string", Description: "工作目录(可选)"},
+				"timeout": {Type: "integer", Description: "超时秒数,默认 60"},
+			},
+			Required: []string{"code"},
+		},
+		Executor: RunPython,
+		ReadOnly: false,
+	},
+	{
 		Name:        "BashOutput",
 		Description: "读取某个后台进程(Bash run_in_background 启动)自上次读取以来的新输出,并报告其运行/退出状态。用于等待服务就绪、查看日志、确认是否报错。",
 		Parameters: ToolParam{

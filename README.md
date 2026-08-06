@@ -225,6 +225,7 @@ CreatePlan
 | 代码图谱 | `CodeGraph`                        |            ✓ |  ✓   |   ✓    |
 | 文件写入 | `Write` `Update`                   |            ✗ |  ✓   |   ⏳   |
 | Shell    | `Bash`                             |            ✗ |  ✓   |   ⏳   |
+| Python   | `Python`（代码片段）                |            ✗ |  ✓   |   ⏳   |
 | 联网     | `Search` `Fetch`                   |            ✓ |  ✓   |   ✓    |
 | 记忆     | `Memory`                           |            ✓ |  ✓   |   ✓    |
 | 技能     | `LoadSkill`                        |            ✓ |  ✓   |   ✓    |
