@@ -680,6 +680,10 @@ func StartStream(
 		var lastTodo []PlanItem
 		gateNudges := 0
 
+		// 工具失败恢复状态:失败指纹计数(执行态,非对话知识;stream 结束即重置)。
+		// 成功调用清除对应指纹;连续失败分级升级,见 failure_tracker.go。
+		ft := newFailureTracker()
+
 		// lastFile = 本轮最近操作的文件路径,给 Update 漏 path 时兜底回填(issue #81)。
 		var lastFile string
 
@@ -1110,6 +1114,8 @@ func StartStream(
 
 				if result.Success {
 					roundProgress = true
+					// 成功 = 该工具+路径的假设被验证,清除失败计数,避免后续失败被误判升级。
+					ft.clearByTool(tc)
 				}
 				ch <- ToolCallResultMsg{
 					Name:    tc.Function.Name,
@@ -1124,6 +1130,16 @@ func StartStream(
 					// 防止一轮并发多条把上下文顶爆(issue #135)。只截入历史的内容,UI(上方 ToolCallResultMsg)仍展示完整结果。
 					Content: clampTurnToolOutput(tc.Function.Name, result.Output, &turnToolBytes),
 				})
+				// 失败恢复:注入 user-role 引导(不要原样重试,先诊断);同指纹连续失败分级升级,
+				// 达到上限时终止循环(仿 errTruncatedToolLoop 的退出方式)。
+				if !result.Success {
+					if nudge, abort := handleToolFailure(tc, result, ft); abort {
+						ch <- StreamErrMsg{errRepeatedToolFailureLoop}
+						return
+					} else if nudge != "" {
+						convo = append(convo, ChatMessage{Role: "user", Content: nudge})
+					}
+				}
 			}
 			// 视觉模型下被 redirect 的 OCR：把对应图片作为独立 user 消息追加进对话（带 ImagePaths，
 			// renderConvoImages 下一轮按当轮模型能力渲染成 base64 / 路径+OCR，切模型也安全）。

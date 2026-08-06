@@ -39,25 +39,25 @@ func RecordedEditLine(path, old string) (int, bool) {
 func EditFile(args map[string]any) ToolResult {
 	path, _ := args["path"].(string)
 	if path == "" {
-		return ToolResult{Output: "错误: path 参数为空", Success: false}
+		return ToolResult{Output: "错误: path 参数为空", Success: false, FailureCategory: FailureCategoryInvalidArgument}
 	}
 	oldStr, _ := args["old_string"].(string)
 	newStr, _ := args["new_string"].(string)
 	if oldStr == "" {
-		return ToolResult{Output: "错误: old_string 不能为空", Success: false}
+		return ToolResult{Output: "错误: old_string 不能为空", Success: false, FailureCategory: FailureCategoryInvalidArgument}
 	}
 	if oldStr == newStr {
-		return ToolResult{Output: "错误: new_string 必须与 old_string 不同", Success: false}
+		return ToolResult{Output: "错误: new_string 必须与 old_string 不同", Success: false, FailureCategory: FailureCategoryInvalidArgument}
 	}
 	replaceAll, _ := args["replace_all"].(bool)
 
 	absPath, err := confineToWorkspace(path)
 	if err != nil {
-		return ToolResult{Output: err.Error(), Success: false}
+		return ToolResult{Output: err.Error(), Success: false, FailureCategory: FailureCategoryInvalidArgument}
 	}
 	data, err := os.ReadFile(absPath)
 	if err != nil {
-		return ToolResult{Output: fmt.Sprintf("读取失败: %v", err), Success: false}
+		return ToolResult{Output: fmt.Sprintf("读取失败: %v", err), Success: false, FailureCategory: FailureCategoryNotFound, FailureHint: "文件读取失败。先确认路径与文件是否存在,再重试。"}
 	}
 
 	// CRLF 文件归一为 LF 处理,写回时还原;search/replace 同样归一,口径一致。
@@ -67,12 +67,15 @@ func EditFile(args map[string]any) ToolResult {
 
 	actual, count, note := resolveEditTarget(content, search)
 	if count == 0 {
-		return ToolResult{Output: "错误: 在文件中未找到 old_string" + editDivergenceHint(content, search), Success: false}
+		return ToolResult{Output: "错误: 在文件中未找到 old_string" + editDivergenceHint(content, search), Success: false,
+			FailureCategory: FailureCategoryNotFound,
+			FailureHint:     "请先 Read 该文件确认实际内容,逐字复制 old_string,不要凭记忆构造。",
+		}
 	}
 	if count > 1 && !replaceAll {
-		return ToolResult{
-			Output:  fmt.Sprintf("错误: old_string 出现 %d 次,请提供更长上下文或设置 replace_all=true", count),
-			Success: false,
+		return ToolResult{Output: fmt.Sprintf("错误: old_string 出现 %d 次,请提供更长上下文或设置 replace_all=true", count), Success: false,
+			FailureCategory: FailureCategoryInvalidArgument,
+			FailureHint:     "old_string 多处匹配。提供更长上下文使其唯一,或按需设置 replace_all=true。",
 		}
 	}
 

@@ -41,6 +41,13 @@ type PropDef struct {
 type ToolResult struct {
 	Output  string
 	Success bool
+
+	// FailureCategory 失败时的机器可读类别(见 failure.go 常量);成功时通常为空。
+	// Agent 据此分类并生成恢复引导,不必解析错误文本。
+	FailureCategory FailureCategory
+
+	// FailureHint 失败时的中文恢复建议(可选)。Tool 只报告事实与建议,不负责恢复。
+	FailureHint string
 }
 
 // OpenAIToolSpec 用于序列化为 OpenAI function calling 协议要求的 JSON。

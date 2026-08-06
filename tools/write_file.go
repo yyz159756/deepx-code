@@ -53,23 +53,23 @@ func writeTooLargeMsg(n, limit int) string {
 func WriteFile(args map[string]any) ToolResult {
 	path, _ := args["path"].(string)
 	if path == "" {
-		return ToolResult{Output: "错误: path 参数为空", Success: false}
+		return ToolResult{Output: "错误: path 参数为空", Success: false, FailureCategory: FailureCategoryInvalidArgument}
 	}
 	content, _ := args["content"].(string)
 	// 超限提前拒绝:放在任何文件系统操作之前,不为一个注定失败的写入去建父目录。
 	if limit := WriteContentLimit(); len(content) > limit {
-		return ToolResult{Output: writeTooLargeMsg(len(content), limit), Success: false}
+		return ToolResult{Output: writeTooLargeMsg(len(content), limit), Success: false, FailureCategory: FailureCategoryInvalidArgument}
 	}
 
 	absPath, err := confineToWorkspace(path)
 	if err != nil {
-		return ToolResult{Output: err.Error(), Success: false}
+		return ToolResult{Output: err.Error(), Success: false, FailureCategory: FailureCategoryInvalidArgument}
 	}
 	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
-		return ToolResult{Output: fmt.Sprintf("创建父目录失败: %v", err), Success: false}
+		return ToolResult{Output: fmt.Sprintf("创建父目录失败: %v", err), Success: false, FailureCategory: FailureCategoryPermissionDenied}
 	}
 	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
-		return ToolResult{Output: fmt.Sprintf("写入失败: %v", err), Success: false}
+		return ToolResult{Output: fmt.Sprintf("写入失败: %v", err), Success: false, FailureCategory: FailureCategoryPermissionDenied, FailureHint: "写入失败。检查路径是否可写(权限/只读/占用),不要原样重试。"}
 	}
 	CodeGraphInvalidate() // 文件变了,代码图谱缓存失效,下次查询重建
 	return ToolResult{
