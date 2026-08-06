@@ -3,6 +3,7 @@ package tui
 import (
 	"deepx/tools"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 
@@ -295,6 +296,9 @@ func extractMainArg(name, argsJSON string) string {
 		return ""
 	case "Bash":
 		return strVal(args["command"])
+	case "Python":
+		// code 可能多行:取首行 + 行数提示,避免撑爆单行(80 字符截断在 formatToolCallLine)。
+		return firstLineSummary(strVal(args["code"]))
 	case "SwitchModel":
 		return strVal(args["reason"])
 	case "UpdatePlanStatus":
@@ -317,6 +321,19 @@ func extractMainArg(name, argsJSON string) string {
 func strVal(v any) string {
 	s, _ := v.(string)
 	return strings.TrimSpace(s)
+}
+
+// firstLineSummary 取多行文本的首行,附行数提示(多行时)。
+// 例:"import json\nprint(1)" → "import json …(2 lines)"。
+func firstLineSummary(s string) string {
+	if s == "" {
+		return ""
+	}
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		lines := 1 + strings.Count(s, "\n")
+		return s[:i] + fmt.Sprintf(" …(%d lines)", lines)
+	}
+	return s
 }
 
 func countLabel(n int, unit string) string {
