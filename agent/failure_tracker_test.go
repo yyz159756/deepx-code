@@ -20,27 +20,27 @@ func TestHandleToolFailure_Escalation(t *testing.T) {
 	res := tools.ToolResult{Output: "未找到", Success: false, FailureCategory: tools.FailureCategoryNotFound}
 
 	// 第 1 次:标准引导
-	n1, abort := handleToolFailure(tc, res, ft)
+	n1, _, abort := handleToolFailure(tc, res, ft)
 	if abort || !strings.Contains(n1, "不要原样重试") {
 		t.Fatalf("第 1 次应给标准引导,got %q abort=%v", n1, abort)
 	}
 	// 第 2 次:soft
-	n2, abort := handleToolFailure(tc, res, ft)
+	n2, _, abort := handleToolFailure(tc, res, ft)
 	if abort || !strings.Contains(n2, "连续失败 2 次") {
 		t.Fatalf("第 2 次应 soft,got %q abort=%v", n2, abort)
 	}
 	// 第 3 次:hard
-	n3, abort := handleToolFailure(tc, res, ft)
+	n3, _, abort := handleToolFailure(tc, res, ft)
 	if abort || !strings.Contains(n3, "禁止用相同参数") {
 		t.Fatalf("第 3 次应 hard,got %q abort=%v", n3, abort)
 	}
 	// 第 4 次:级别已注入过(hard)→ 不重复注入,也不 abort
-	n4, abort := handleToolFailure(tc, res, ft)
+	n4, _, abort := handleToolFailure(tc, res, ft)
 	if abort || n4 != "" {
 		t.Fatalf("第 4 次不应重复注入,got %q abort=%v", n4, abort)
 	}
 	// 第 5 次:abort
-	_, abort = handleToolFailure(tc, res, ft)
+	_, _, abort = handleToolFailure(tc, res, ft)
 	if !abort {
 		t.Fatal("第 5 次应 abort")
 	}
@@ -62,7 +62,7 @@ func TestHandleToolFailure_SuccessClears(t *testing.T) {
 	}
 
 	// 再失败:应从第 1 级重新计(标准引导,非 soft)
-	n, abort := handleToolFailure(tc, res, ft)
+	n, _, abort := handleToolFailure(tc, res, ft)
 	if abort || !strings.Contains(n, "不要原样重试") || strings.Contains(n, "连续失败") {
 		t.Fatalf("清除后应回到第 1 级,got %q abort=%v", n, abort)
 	}
@@ -73,7 +73,7 @@ func TestHandleToolFailure_OldToolKeywordFallback(t *testing.T) {
 	// 无 FailureCategory 的旧工具(如 Explore 失败)→ 按关键词分类
 	tc := failureToolCall("Explore", `{"task":"x"}`)
 	res := tools.ToolResult{Output: "探索失败: connection refused", Success: false}
-	n, abort := handleToolFailure(tc, res, ft)
+	n, _, abort := handleToolFailure(tc, res, ft)
 	if abort {
 		t.Fatal("不应 abort")
 	}
@@ -97,5 +97,44 @@ func TestBashFingerprint_Normalize(t *testing.T) {
 	fp3 := ft.fingerprint(tc3, tools.FailureCategoryExecution)
 	if fp1 == fp3 {
 		t.Fatal("不同命令不应同指纹")
+	}
+}
+
+
+// Phase 3.2:FailureID 事件身份。
+func TestFailureID_GeneratedPerEvent(t *testing.T) {
+	ft := newFailureTracker()
+	tc := failureToolCall("Update", `{"path":"c.go","old_string":"旧","new_string":"新"}`)
+	res := tools.ToolResult{Output: "未找到", Success: false, FailureCategory: tools.FailureCategoryNotFound}
+
+	// 每次失败生成新 ID(递增唯一)
+	var id1, id2 string
+	_, id1, _ = handleToolFailure(tc, res, ft)
+	_, id2, _ = handleToolFailure(tc, res, ft)
+	if id1 == "" || id2 == "" {
+		t.Fatalf("ID 不应为空: %q %q", id1, id2)
+	}
+	if id1 == id2 {
+		t.Fatalf("同指纹连续失败应每次新 ID,got %q", id1)
+	}
+	if !strings.HasPrefix(id1, "f_") || !strings.HasPrefix(id2, "f_") {
+		t.Fatalf("ID 应以 f_ 开头: %q %q", id1, id2)
+	}
+}
+
+func TestFailureID_SuccessClears(t *testing.T) {
+	ft := newFailureTracker()
+	tc := failureToolCall("Update", `{"path":"d.go","old_string":"旧","new_string":"新"}`)
+	res := tools.ToolResult{Output: "未找到", Success: false, FailureCategory: tools.FailureCategoryNotFound}
+
+	_, id1, _ := handleToolFailure(tc, res, ft)
+	ft.clearByTool(tc) // 成功清除
+	if len(ft.ids) != 0 {
+		t.Fatalf("成功后 ids 应清空,got %v", ft.ids)
+	}
+	// 再失败 → 新 ID(计数器继续递增,不与旧 ID 复用)
+	_, id2, _ := handleToolFailure(tc, res, ft)
+	if id2 == id1 {
+		t.Fatalf("清除后新失败应生成新 ID,got %q", id2)
 	}
 }

@@ -29,13 +29,22 @@ const (
 
 // failureTracker 跟踪失败指纹的连续失败次数。StartStream 局部状态,非全局/非持久。
 type failureTracker struct {
-	counts    map[string]int // fingerprint → 累计失败次数
-	lastNudge map[string]int // fingerprint → 已注入的最高级别(1/2/3),同级别不重复注入
+	counts    map[string]int    // fingerprint → 累计失败次数
+	lastNudge map[string]int    // fingerprint → 已注入的最高级别(1/2/3),同级别不重复注入
+	ids       map[string]string // fingerprint → 最近一次失败的 FailureID(事件身份,每次失败新 ID)
+	counter   int               // stream 局部递增,生成 f_001 / f_002 …
 }
 
 func newFailureTracker() *failureTracker {
-	return &failureTracker{counts: map[string]int{}, lastNudge: map[string]int{}}
+	return &failureTracker{
+		counts:    map[string]int{},
+		lastNudge: map[string]int{},
+		ids:       map[string]string{},
+	}
 }
+
+// LastID 返回该指纹最近一次失败的 FailureID;无则空串。
+func (ft *failureTracker) LastID(fp string) string { return ft.ids[fp] }
 
 // fingerprint 生成工具调用的失败指纹(见 design.md D2):
 //
@@ -62,6 +71,7 @@ func (ft *failureTracker) fingerprint(tc ToolCall, cat tools.FailureCategory) st
 func (ft *failureTracker) clear(fp string) {
 	delete(ft.counts, fp)
 	delete(ft.lastNudge, fp)
+	delete(ft.ids, fp)
 }
 
 // baseFingerprint 生成不含 category 的基础指纹前缀(成功清除用):
@@ -91,49 +101,53 @@ func (ft *failureTracker) clearByTool(tc ToolCall) {
 		if strings.HasPrefix(k, base) {
 			delete(ft.counts, k)
 			delete(ft.lastNudge, k)
+			delete(ft.ids, k)
 		}
 	}
 }
 
-// bump 自增指纹失败计数并返回当前值。
+// bump 自增指纹失败计数并返回当前值;同时为本次失败事件生成新 FailureID(每次失败一个新事件)。
 func (ft *failureTracker) bump(fp string) int {
 	ft.counts[fp]++
+	ft.counter++
+	ft.ids[fp] = fmt.Sprintf("f_%03d", ft.counter)
 	return ft.counts[fp]
 }
 
 // handleToolFailure 处理一次工具失败:分类 → 指纹 → 分级。
-// 返回 nudge 文本(空串 = 本级别已注入过,不重复)与 abort(达上限,终止循环)。
-func handleToolFailure(tc ToolCall, result tools.ToolResult, ft *failureTracker) (string, bool) {
+// 返回 nudge 文本(空串 = 本级别已注入过,不重复)、本次失败的 FailureID、abort(达上限,终止循环)。
+func handleToolFailure(tc ToolCall, result tools.ToolResult, ft *failureTracker) (string, string, bool) {
 	cat := result.FailureCategory
 	if cat == "" {
 		cat = tools.ClassifyFailure(result.Output) // 旧工具回退:关键词分类
 	}
 	fp := ft.fingerprint(tc, cat)
 	n := ft.bump(fp)
+	id := ft.ids[fp]
 
 	// 成功清除在调用方(result.Success)处理;这里只处理失败侧。
 
 	switch {
 	case n >= failureAbortThreshold:
-		return "", true
+		return "", id, true
 	case n >= failureHardThreshold:
 		if ft.lastNudge[fp] >= failureHardThreshold {
-			return "", false
+			return "", id, false
 		}
 		ft.lastNudge[fp] = failureHardThreshold
-		return hardFailureNudge(tc.Function.Name, n), false
+		return hardFailureNudge(tc.Function.Name, n), id, false
 	case n >= failureSoftThreshold:
 		if ft.lastNudge[fp] >= failureSoftThreshold {
-			return "", false
+			return "", id, false
 		}
 		ft.lastNudge[fp] = failureSoftThreshold
-		return softFailureNudge(n), false
+		return softFailureNudge(n), id, false
 	default:
 		if ft.lastNudge[fp] >= 1 {
-			return "", false
+			return "", id, false
 		}
 		ft.lastNudge[fp] = 1
-		return standardFailureNudge(tc.Function.Name, cat, result.FailureHint), false
+		return standardFailureNudge(tc.Function.Name, cat, result.FailureHint), id, false
 	}
 }
 
