@@ -52,9 +52,15 @@ func TestEditFile_FailureMetadata(t *testing.T) {
 	if !strings.Contains(res.FailureHint, "Read") {
 		t.Errorf("hint 应引导 Read,got: %q", res.FailureHint)
 	}
+	if res.Error == "" {
+		t.Error("Error 摘要不应为空")
+	}
+	if res.Output == "" {
+		t.Error("Output(带 hint 的提示文本)不应被清空")
+	}
 }
 
-// Bash 失败应携带 execution category。
+// Bash 失败应携带 execution category 与 Error 摘要。
 func TestFormatForegroundResult_FailureMetadata(t *testing.T) {
 	res := formatForegroundResult("boom", errors.New("exit status 1"))
 	if res.Success {
@@ -66,9 +72,15 @@ func TestFormatForegroundResult_FailureMetadata(t *testing.T) {
 	if res.FailureHint == "" {
 		t.Error("hint 不应为空")
 	}
+	if !strings.Contains(res.Error, "command failed") {
+		t.Errorf("Error 应为 command failed 摘要,got %q", res.Error)
+	}
+	if res.Output == "" {
+		t.Error("Output(命令输出)不应被清空")
+	}
 }
 
-// Write 失败(路径被拒)应携带 category。
+// Write 失败(路径被拒)应携带 category 与 Error。
 func TestWriteFile_FailureMetadata(t *testing.T) {
 	res := WriteFile(map[string]any{"path": "", "content": "x"})
 	if res.Success {
@@ -76,5 +88,8 @@ func TestWriteFile_FailureMetadata(t *testing.T) {
 	}
 	if res.FailureCategory != FailureCategoryInvalidArgument {
 		t.Errorf("category = %q, want %q", res.FailureCategory, FailureCategoryInvalidArgument)
+	}
+	if res.Error == "" {
+		t.Error("Error 摘要不应为空")
 	}
 }

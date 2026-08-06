@@ -53,23 +53,26 @@ func writeTooLargeMsg(n, limit int) string {
 func WriteFile(args map[string]any) ToolResult {
 	path, _ := args["path"].(string)
 	if path == "" {
-		return ToolResult{Output: "错误: path 参数为空", Success: false, FailureCategory: FailureCategoryInvalidArgument}
+		return ToolResult{Output: "错误: path 参数为空", Success: false, Error: "path 参数为空", FailureCategory: FailureCategoryInvalidArgument}
 	}
 	content, _ := args["content"].(string)
 	// 超限提前拒绝:放在任何文件系统操作之前,不为一个注定失败的写入去建父目录。
 	if limit := WriteContentLimit(); len(content) > limit {
-		return ToolResult{Output: writeTooLargeMsg(len(content), limit), Success: false, FailureCategory: FailureCategoryInvalidArgument}
+		return ToolResult{Output: writeTooLargeMsg(len(content), limit), Success: false,
+			Error:            fmt.Sprintf("content 超限(%d bytes > %d)", len(content), limit),
+			FailureCategory:  FailureCategoryInvalidArgument,
+		}
 	}
 
 	absPath, err := confineToWorkspace(path)
 	if err != nil {
-		return ToolResult{Output: err.Error(), Success: false, FailureCategory: FailureCategoryInvalidArgument}
+		return ToolResult{Output: err.Error(), Success: false, Error: "路径不在 workspace 内", FailureCategory: FailureCategoryInvalidArgument}
 	}
 	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
-		return ToolResult{Output: fmt.Sprintf("创建父目录失败: %v", err), Success: false, FailureCategory: FailureCategoryPermissionDenied}
+		return ToolResult{Output: fmt.Sprintf("创建父目录失败: %v", err), Success: false, Error: "创建父目录失败", FailureCategory: FailureCategoryPermissionDenied}
 	}
 	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
-		return ToolResult{Output: fmt.Sprintf("写入失败: %v", err), Success: false, FailureCategory: FailureCategoryPermissionDenied, FailureHint: "写入失败。检查路径是否可写(权限/只读/占用),不要原样重试。"}
+		return ToolResult{Output: fmt.Sprintf("写入失败: %v", err), Success: false, Error: "写入失败", FailureCategory: FailureCategoryPermissionDenied, FailureHint: "写入失败。检查路径是否可写(权限/只读/占用),不要原样重试。"}
 	}
 	CodeGraphInvalidate() // 文件变了,代码图谱缓存失效,下次查询重建
 	return ToolResult{
