@@ -19,8 +19,8 @@ The toolset SHALL provide a `Git` tool that executes git commands by directly in
 - **WHEN** the Git tool fails (exit ≥ 2)
 - **THEN** the result SHALL carry `Error` (short summary) + `Output` (full diagnostics) + `FailureCategory` + `FailureHint`, so the failure protocol renders it uniformly
 
-### Requirement: 工具失败结构化契约
-The toolset SHALL provide a machine-readable failure category, a failure summary, and the raw diagnostic output for failed tool executions, so the failure protocol renders uniformly regardless of which tool failed (mechanism/strategy separation: tools report facts, the agent decides recovery).
+### Requirement: 工具失败结果契约
+Tool failure results SHALL expose a standard, machine-readable shape — FailureCategory, Error summary, and raw Output diagnostic — so the failure protocol renders uniformly regardless of which tool failed. This is a tool-level result contract, NOT a requirement that every tool implement the full agent failure protocol (mechanism/strategy separation: tools report facts, the agent decides recovery).
 
 #### Scenario: 失败工具返回结构化字段
 - **WHEN** a tool call fails
@@ -29,8 +29,8 @@ The toolset SHALL provide a machine-readable failure category, a failure summary
 - **AND** the tool result SHALL keep the raw diagnostic observation in `Output`, not discard it for the sake of structure
 - **AND** the tool result MAY include a `FailureHint` in Chinese suggesting the concrete next step
 
-#### Scenario: 超时是失败类别之一
+#### Scenario: 超时使用 timeout 类别
 - **WHEN** a tool execution exceeds its configured timeout
-- **THEN** the result SHALL fail with `FailureCategory` = timeout
+- **THEN** the result SHALL fail with `FailureCategory` = timeout (MUST use the timeout category, not a generic execution_error)
 - **AND** the result SHALL include an `Error` summarizing the timeout
 - **AND** the result SHALL preserve any partial output in `Output`

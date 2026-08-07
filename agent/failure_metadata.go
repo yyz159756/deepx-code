@@ -22,9 +22,11 @@ type failurePolicy struct {
 
 // failurePolicies 集中全部失败类别的策略映射(机制/策略分离):
 // 策略(哪些类别可重试、恢复方向)只在此一张表维护,IsRetryable/GetRecoveryAction 查表取值,
-// 改策略只动这一处,不散落 switch。未列入的类别(unknown 等)缺省 = {false, abort},
-// 与历史 default 分支语义一致。
+// 改策略只动这一处,不散落 switch。表覆盖 AllFailureCategories 全部 7 个类别
+// (有 TestAllFailureCategoriesHavePolicy 防漏:新增类别漏加策略会测试失败);
+// unknown 显式入表 = {false, abort},语义与历史 default 分支一致。
 var failurePolicies = map[tools.FailureCategory]failurePolicy{
+	tools.FailureCategoryUnknown:          {retryable: false, action: RecoveryAbort},
 	tools.FailureCategoryNotFound:         {retryable: false, action: RecoveryInspectBeforeRetry},
 	tools.FailureCategoryInvalidArgument:  {retryable: false, action: RecoveryModifyArguments},
 	tools.FailureCategoryPermissionDenied: {retryable: false, action: RecoveryRequestPermission},

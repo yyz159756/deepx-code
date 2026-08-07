@@ -17,6 +17,19 @@ const (
 	FailureCategoryNetwork          FailureCategory = "network"
 )
 
+// AllFailureCategories 是 FailureCategory 全集,供策略表/UI/测试遍历
+// (如"新增类别必须同步策略映射"的防漏保护,见 agent failure_metadata_test)。
+// 新增常量时必须同步加入此列表。
+var AllFailureCategories = []FailureCategory{
+	FailureCategoryUnknown,
+	FailureCategoryNotFound,
+	FailureCategoryInvalidArgument,
+	FailureCategoryPermissionDenied,
+	FailureCategoryExecution,
+	FailureCategoryTimeout,
+	FailureCategoryNetwork,
+}
+
 // classifyRules 是错误文本关键词 → 类别的映射(agent 对未带 category 的旧工具做回退)。
 // 同时覆盖中英文常见措辞;按更具体的类别优先(执行/网络/权限/超时在 generic 之前判断)。
 var classifyRules = []struct {

@@ -49,6 +49,17 @@ func TestGetRecoveryAction(t *testing.T) {
 	}
 }
 
+// TestAllFailureCategoriesHavePolicy 防漏保护:每新增一个 FailureCategory 常量,
+// 必须同步在 failurePolicies 表里补策略(否则 IsRetryable/GetRecoveryAction 会静默
+// 落到缺省 {false,abort})。新增常量 → AllFailureCategories 也要同步加入(见 tools/failure.go)。
+func TestAllFailureCategoriesHavePolicy(t *testing.T) {
+	for _, cat := range tools.AllFailureCategories {
+		if _, ok := failurePolicies[cat]; !ok {
+			t.Errorf("FailureCategory %q 缺少 failurePolicies 策略映射,请补上(缺省会静默当成不可重试+abort)", cat)
+		}
+	}
+}
+
 // 渲染字段顺序稳定:protocol_version/status/category/retryable/recovery_action 在前,summary/diagnostic 在后。
 func TestRenderToolFailureProtocol_FieldOrder(t *testing.T) {
 	r := tools.ToolResult{Success: false, Error: "boom", Output: "diag", FailureCategory: tools.FailureCategoryNetwork}
