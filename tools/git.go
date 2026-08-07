@@ -85,7 +85,7 @@ func formatGitResult(stdout, stderr string, err error) ToolResult {
 		}
 		return ToolResult{Output: out + "\n[exit] 1", Success: true}
 	}
-	// exit ≥ 2:真错误。stdout+stderr 作为诊断完整保留(agent 层会截断/协议化)。
+	// exit ≥ 2 或无法启动:真错误。stdout+stderr 作为诊断完整保留(agent 层会截断/协议化)。
 	out := strings.TrimRight(stdout, "\n")
 	if s := strings.TrimRight(stderr, "\n"); s != "" {
 		if out != "" {
@@ -96,11 +96,22 @@ func formatGitResult(stdout, stderr string, err error) ToolResult {
 	exitCode := "?"
 	if ee, ok := err.(*exec.ExitError); ok {
 		exitCode = fmt.Sprintf("%d", ee.ExitCode())
+	} else if !strings.Contains(out, err.Error()) {
+		// 非 exit 错误(如 git 可执行文件不存在,exec.ErrNotFound):真实错误必须进诊断,
+		// 否则模型只看到 "[exit] ?" 无从判断原因,失败恢复协议失去诊断基础。
+		if out != "" {
+			out += "\n"
+		}
+		out += err.Error()
 	}
 	// Error 摘要(stderr 首行),诊断留在 Output —— 落失败恢复协议(Error/Output 边界)。
 	summary := firstLine(strings.TrimSpace(stderr))
 	if summary == "" {
-		summary = fmt.Sprintf("git 退出码 %s", exitCode)
+		if ee, ok := err.(*exec.ExitError); ok {
+			summary = fmt.Sprintf("git 退出码 %d", ee.ExitCode())
+		} else {
+			summary = err.Error() // 如 "exec: \"git\": executable file not found in %PATH%"
+		}
 	}
 	return ToolResult{
 		Output:          out + fmt.Sprintf("\n[exit] %s", exitCode),

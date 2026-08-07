@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -106,5 +107,23 @@ func TestGit_EmptyArgs(t *testing.T) {
 	r := Git(map[string]any{"args": []any{}})
 	if r.Success {
 		t.Fatal("空 args 应失败")
+	}
+}
+
+// git 可执行文件不存在(exec.ErrNotFound,非 ExitError):真实错误必须进诊断,
+// 否则模型只看到 "[exit] ?" 无从判断原因 —— 失败恢复协议失去诊断基础。
+func TestGit_ExecutableNotFound(t *testing.T) {
+	r := formatGitResult("", "", &exec.Error{Name: "git", Err: errors.New("executable file not found in %PATH%")})
+	if r.Success {
+		t.Fatal("git 缺失应失败")
+	}
+	if !strings.Contains(r.Output, "not found") {
+		t.Errorf("诊断应保留真实错误,got Output=%q", r.Output)
+	}
+	if !strings.Contains(r.Error, "not found") {
+		t.Errorf("Error 摘要应含真实原因,got %q", r.Error)
+	}
+	if r.FailureCategory != FailureCategoryExecution {
+		t.Errorf("应为 execution,got %q", r.FailureCategory)
 	}
 }
