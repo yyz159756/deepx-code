@@ -227,7 +227,8 @@ type ImageURL struct {
 }
 
 // MarshalJSON 根据是否带图,把 content 序列化成 string 或 array。
-// 同时保证 tool 消息 / 纯 assistant 工具调用消息 在 content 为空时不出现该字段。
+// content 为空时按 role 兜底:assistant(无 tool_calls)与 tool 消息必须带 content 字段(空串),
+// 否则严格后端 400(issue #94 家族);纯 assistant 工具调用消息空 content 保持省略(OpenAI 允许)。
 func (m ChatMessage) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		Role             string     `json:"role"`
@@ -258,6 +259,11 @@ func (m ChatMessage) MarshalJSON() ([]byte, error) {
 		// DeepSeek (和部分严格的 OpenAI 兼容实现) 要求 assistant 消息至少含 content 或 tool_calls。
 		// 当模型只输出 reasoning_content 时,两者都缺会导致下轮请求被 API 400 拒绝。
 		// 这里兜底发个空字符串 content 满足契约;omitempty 对非 nil interface(空字符串包裹后)不生效。
+		w.Content = ""
+	case m.Role == "tool":
+		// OpenAI 规范 tool 消息 content 必填(可为空串)。空输出(如 git status --short 在干净
+		// 工作区 exit 0、stdout 为空)序列化后缺 content 字段,严格后端直接 400
+		// "messages[N]: missing field `content`"(issue #94 家族)。兜底发空串满足契约。
 		w.Content = ""
 	}
 	return json.Marshal(w)
