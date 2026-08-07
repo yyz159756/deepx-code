@@ -272,6 +272,11 @@ func NewIndex(root string) *Index {
 func (ix *Index) Disabled() bool { return ix.forbidden }
 func (ix *Index) Reason() string { return ix.reason }
 
+// IsProject 报告根目录是否被识别为单项目根(含 .git/go.mod/package.json 等项目标志)。
+// 非项目根(多项目容器 / 散目录)仍可惰性构建,但图谱可能不全或超预算失败 ——
+// 工具层据此提示模型降级用 Grep,而不是等构建失败才发现。
+func (ix *Index) IsProject() bool { return ix.isProject }
+
 // Prewarm 后台预热:开机只建"快图"(语法层,便宜),不阻塞调用方。
 // 刻意不在此跑精确解析(go/packages 较重、可能联网)—— 那留到模型真正调用 CodeGraph 时
 // 才后台升级,避免"用户根本没用代码图谱却在每次启动后台跑 go list"的浪费。

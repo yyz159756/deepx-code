@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"time"
 )
 
@@ -38,6 +39,22 @@ type buildEnvelope struct {
 	Refs     []Ref
 	Edges    []Edge
 	Degraded bool
+}
+
+// killTree 兜底清理构建子进程的整棵进程树(超时 / 失败路径调用)。
+// exec.CommandContext 超时只 Kill 顶层进程,go list 等孙进程会残留成孤儿并堆积
+// (实测:go test 超时强杀后 92+ 个残留进程榨干系统)。Windows 用 taskkill /T 连树杀
+// (与 tools/bg_windows.go 同款,但 codegraph 不能 import tools 防循环,故自带);
+// Unix 杀顶层,孙进程依赖 go/packages 在 ctx 取消时自清。进程未启动/已退出时幂等。
+func killTree(cmd *exec.Cmd) {
+	if cmd.Process == nil {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		_ = exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
+		return
+	}
+	_ = cmd.Process.Kill()
 }
 
 // BuildAndEncode 是子进程入口(deepx __codegraph-build <root> <mode>):在本进程建图,
@@ -107,7 +124,11 @@ func buildViaSubprocess(root, mode string) (*Graph, bool, error) {
 		return inProcessBuild(root, mode) // 起不来(环境禁 exec)→ 回退进程内
 	}
 	if err := cmd.Wait(); err != nil {
-		// 起来了但失败(看门狗自杀 / 超时 / panic)→ 降级,绝不进程内重试
+		// 起来了但失败(看门狗自杀 / 超时 / panic)→ 降级,绝不进程内重试。
+		// 关键:超时/被杀后必须清**整棵进程树**(含 go list 孙进程)——exec.CommandContext
+		// 超时只 Kill 顶层进程,孙进程会残留成孤儿并堆积(实测:go test 超时强杀后
+		// 92+ 个残留进程榨干系统资源)。taskkill /T 兜底连树杀。
+		killTree(cmd)
 		return nil, true, fmt.Errorf("codegraph 子进程建图失败(疑似超内存/超时,已降级): %w", err)
 	}
 	var env buildEnvelope
