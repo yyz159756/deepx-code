@@ -1,0 +1,103 @@
+package tools
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// execGit 测试辅助:在 dir 里跑 git。
+func execGit(dir string, args ...string) *exec.Cmd {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	return cmd
+}
+
+// Git 工具测试:exec 直调,exit code 语义(git 约定)。
+
+// 临时 git 仓库辅助:初始化 + 一次提交。
+func newTestRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	run := func(args ...string) string {
+		cmd := execGit(dir, args...)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	run("init", "-q")
+	run("config", "user.email", "t@t")
+	run("config", "user.name", "t")
+	f := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(f, []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "a.txt")
+	run("commit", "-q", "-m", "init")
+	return dir
+}
+
+func TestGit_StatusSuccess(t *testing.T) {
+	dir := newTestRepo(t)
+	r := Git(map[string]any{"args": []any{"status", "--short"}, "cwd": dir})
+	if !r.Success {
+		t.Fatalf("status 应成功,got Success=%v Output=%q", r.Success, r.Output)
+	}
+}
+
+func TestGit_LogOutput(t *testing.T) {
+	dir := newTestRepo(t)
+	r := Git(map[string]any{"args": []any{"log", "--oneline"}, "cwd": dir})
+	if !r.Success {
+		t.Fatalf("log 应成功,got %v %q", r.Success, r.Output)
+	}
+	if !strings.Contains(r.Output, "init") {
+		t.Fatalf("log 应含提交信息,got %q", r.Output)
+	}
+}
+
+// git diff 有差异时是正常结果(非失败)。注意:Windows git 2.45 默认 diff 有差异也 exit 0;
+// 显式 --exit-code 才返回 1 —— 两者都应视为成功(有差异是观察结果,不是失败)。
+func TestGit_DiffExit1IsSuccess(t *testing.T) {
+	dir := newTestRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// exit 0 场景:默认 diff --stat
+	r := Git(map[string]any{"args": []any{"diff", "--stat"}, "cwd": dir})
+	if !r.Success {
+		t.Fatalf("diff 有差异应视为成功,got Success=%v Output=%q", r.Success, r.Output)
+	}
+	// exit 1 场景:--exit-code 有差异 → 成功 + [exit] 1 标记
+	r2 := Git(map[string]any{"args": []any{"diff", "--exit-code"}, "cwd": dir})
+	if !r2.Success {
+		t.Fatalf("diff --exit-code 有差异(exit 1)应视为成功,got Success=%v Output=%q", r2.Success, r2.Output)
+	}
+	if !strings.Contains(r2.Output, "[exit] 1") {
+		t.Fatalf("exit 1 应带标记,got %q", r2.Output)
+	}
+}
+
+// 非 git 目录 → git exit 128 → 失败 + 诊断保留。
+func TestGit_NotARepositoryFails(t *testing.T) {
+	dir := t.TempDir() // 非 git 仓库
+	r := Git(map[string]any{"args": []any{"status"}, "cwd": dir})
+	if r.Success {
+		t.Fatalf("非仓库应失败,got Success=%v", r.Success)
+	}
+	if !strings.Contains(r.Output, "not a git repository") && !strings.Contains(r.Output, "128") {
+		t.Fatalf("失败应带诊断(exit 128),got %q", r.Output)
+	}
+}
+
+// args 空 → 拒绝。
+func TestGit_EmptyArgs(t *testing.T) {
+	r := Git(map[string]any{"args": []any{}})
+	if r.Success {
+		t.Fatal("空 args 应失败")
+	}
+}

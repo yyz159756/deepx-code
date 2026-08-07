@@ -299,6 +299,18 @@ func extractMainArg(name, argsJSON string) string {
 	case "Python":
 		// code 可能多行:取首行 + 行数提示,避免撑爆单行(80 字符截断在 formatToolCallLine)。
 		return firstLineSummary(strVal(args["code"]))
+	case "Git":
+		// args 是数组,join 成空格显示(如 "status --short")
+		if arr, ok := args["args"].([]any); ok {
+			parts := make([]string, 0, len(arr))
+			for _, a := range arr {
+				if s, ok := a.(string); ok {
+					parts = append(parts, s)
+				}
+			}
+			return strings.Join(parts, " ")
+		}
+		return ""
 	case "SwitchModel":
 		return strVal(args["reason"])
 	case "UpdatePlanStatus":

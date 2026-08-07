@@ -340,6 +340,25 @@ var Tools = []Tool{
 		ReadOnly: false,
 	},
 	{
+		Name: "Git",
+		Description: "执行 git 命令,直调 git 可执行文件(不经 cmd/powershell —— 避免 Windows 下 PowerShell 把 native stderr 当错误流、" +
+			"污染退出码导致的'git 成功却误报失败')。\n" +
+			"**git 操作(commit/branch/merge/push/log/diff/status 等)优先用本工具,不要用 Bash 拼 git 命令**。" +
+			"命令通过 args 数组传参(无引号转义问题),cwd 指定仓库目录。\n" +
+			"exit code 语义:0 = 成功;1 = 正常结果(如 diff 有差异,非失败);≥2 = 失败(诊断保留在输出)。",
+		Parameters: ToolParam{
+			Type: "object",
+			Properties: map[string]PropDef{
+				"args":    {Type: "array", Description: "git 参数数组,如 [\"status\",\"--short\"] / [\"diff\",\"HEAD\"] / [\"commit\",\"-m\",\"msg\"]", Items: map[string]any{"type": "string"}},
+				"cwd":     {Type: "string", Description: "仓库目录(可选,缺省用当前工作目录)"},
+				"timeout": {Type: "integer", Description: "超时秒数,默认 60"},
+			},
+			Required: []string{"args"},
+		},
+		Executor: Git,
+		ReadOnly: false,
+	},
+	{
 		Name:        "BashOutput",
 		Description: "读取某个后台进程(Bash run_in_background 启动)自上次读取以来的新输出,并报告其运行/退出状态。用于等待服务就绪、查看日志、确认是否报错。",
 		Parameters: ToolParam{
