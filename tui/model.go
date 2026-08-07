@@ -3050,6 +3050,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.streamCh == nil {
 			return m, nil
 		}
+		// 错误留痕:UI 报错但失败轮不写 jsonl/history,不落盘事后无法排查(如 400)。
+		// 独立错误日志 errors-YYYY-MM-DD.log 记录,写失败静默不影响主流程。
+		if m.session != nil {
+			m.session.AppendError(msg.Err)
+		}
 		m.chatContent.Append("\n[Error: " + msg.Err.Error() + "]\n\n")
 		m.status = "error"
 		m.streaming = false
