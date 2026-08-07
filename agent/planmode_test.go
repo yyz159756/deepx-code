@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-// issue #108:plan 模式应在执行层硬拦 Write/Update/Bash,而不仅靠 system prompt 让 LLM 自觉。
+// issue #108:plan 模式应在执行层硬拦 Write/Update/Bash/Python,而不仅靠 system prompt 让 LLM 自觉。
 func TestExecuteTool_PlanModeBlocksWrites(t *testing.T) {
 	// 这些工具在 plan 模式下必须被拦下(返回失败、不真正执行)。
-	for _, name := range []string{"Write", "Update", "Bash"} {
+	for _, name := range []string{"Write", "Update", "Bash", "Python"} {
 		tc := ToolCall{Function: ToolCallFunc{Name: name, Arguments: "{}"}}
 		res := executeTool(tc, AgentMode_Plan, nil)
 		if res.Success {
@@ -31,10 +31,20 @@ func TestExecuteTool_PlanModeAllowsReads(t *testing.T) {
 }
 
 func TestBlockedInPlan(t *testing.T) {
-	blocked := map[string]bool{"Write": true, "Update": true, "Bash": true}
-	for _, name := range []string{"Write", "Update", "Bash", "Read", "Grep", "List", "OCR", "Glob"} {
+	blocked := map[string]bool{"Write": true, "Update": true, "Bash": true, "Python": true}
+	for _, name := range []string{"Write", "Update", "Bash", "Python", "Read", "Grep", "List", "OCR", "Glob"} {
 		if got := blockedInPlan(name); got != blocked[name] {
 			t.Errorf("blockedInPlan(%q) = %v, 期望 %v", name, got, blocked[name])
+		}
+	}
+}
+
+func TestIsReviewable(t *testing.T) {
+	// 能执行任意代码/写文件的工具,review 模式下必须人工确认;只读工具不需要。
+	reviewable := map[string]bool{"Write": true, "Update": true, "Bash": true, "Python": true}
+	for _, name := range []string{"Write", "Update", "Bash", "Python", "Read", "Grep", "List", "OCR", "Glob"} {
+		if got := isReviewable(name); got != reviewable[name] {
+			t.Errorf("isReviewable(%q) = %v, 期望 %v", name, got, reviewable[name])
 		}
 	}
 }

@@ -41,6 +41,19 @@ type PropDef struct {
 type ToolResult struct {
 	Output  string
 	Success bool
+
+	// Error is a short failure summary.
+	// It describes WHY execution failed.
+	// Diagnostic details should remain in Output.
+	// (禁止反模式:Error=完整 stderr 且 Output 清空 —— 诊断信息是模型需要的观察,不因结构化而丢弃)
+	Error string
+
+	// FailureCategory 失败时的机器可读类别(见 failure.go 常量);成功时通常为空。
+	// Agent 据此分类并生成恢复引导,不必解析错误文本。
+	FailureCategory FailureCategory
+
+	// FailureHint 失败时的中文恢复建议(可选)。Tool 只报告事实与建议,不负责恢复。
+	FailureHint string
 }
 
 // OpenAIToolSpec 用于序列化为 OpenAI function calling 协议要求的 JSON。
@@ -172,6 +185,7 @@ var Tools = []Tool{
 			Type: "object",
 			Properties: map[string]PropDef{
 				"op":    {Type: "string", Enum: []string{"symbols", "def", "refs", "callers", "callees", "implementers", "subtypes", "supertypes", "impact", "imports", "outline", "reindex"}, Description: "操作类型"},
+				"root":  {Type: "string", Description: "可选:指定项目根(绝对路径)建图查询,缺省用当前 workspace 根。多项目 workspace(如 workspace 是多个项目的父目录)下用它对单个项目建图,此时 path 参数相对该 root;不传则在 workspace 根上查(多项目时可能不全,输出会带警告)"},
 				"name":  {Type: "string", Description: "符号名;def/refs/callers/callees/implementers/subtypes/supertypes/impact 必填,支持 \"Type.Method\" 限定名;symbols 作模糊过滤"},
 				"path":  {Type: "string", Description: "outline/imports 用:相对 workspace 的文件路径"},
 				"kind":  {Type: "string", Enum: []string{"func", "method", "type", "var", "const", "field"}, Description: "可选,按符号种类过滤"},
@@ -282,6 +296,7 @@ var Tools = []Tool{
 	{
 		Name: "Bash",
 		Description: "在 shell 中执行命令并返回 stdout/stderr。可指定 cwd 与超时秒数(默认 60)。" +
+			"\n**优先 Python 工具**:执行 Python 代码 / 文本处理 / 数据计算,或命令涉及引号、中文、管道、删除时,优先用 Python 工具(代码经 stdin 不经 shell,引号原样),不要先用 Bash 报错再换。" +
 			"\nWrite/Update 因目标在 workspace 外被拒时,由用户确认或自行处理,不要自作主张绕过。" +
 			"\n\n**常驻进程**(开发服务器 / watch / daemon,如 npm run dev、vite、python -m http.server、tail -f)" +
 			"不会主动退出 —— 默认(前台)调用会一直阻塞到 timeout 才返回,并把子进程甩成孤儿。" +
@@ -289,7 +304,8 @@ var Tools = []Tool{
 			"随后用 `BashOutput(id)` 读输出/查是否就绪,用完用 `KillBash(id)` 结束。" +
 			"\n⚠️ **不要用 shell 的 `&` 或 `nohup` 在前台模式里自己后台化**(如 `./server &`):那样救不了," +
 			"Go 仍会等子进程继承的输出管道关闭而卡死到 timeout,还会留孤儿;要后台跑就用 `run_in_background: true`。" +
-			"\n前台模式(默认)只用来跑会主动退出的命令:构建 / 单测 / lint / grep / git / ls / 安装依赖 / 一次性脚本。",
+			"\n前台模式(默认)只用来跑会主动退出的命令:构建 / 单测 / lint / grep / git / ls / 安装依赖 / 一次性脚本。" +
+			"\nWindows 下的命令执行坑(cwd 失效 / 引号嵌套 / 编码 / 沙箱拦截等)见 bash-traps skill,执行前先加载。",
 		Parameters: ToolParam{
 			Type: "object",
 			Properties: map[string]PropDef{
@@ -301,6 +317,45 @@ var Tools = []Tool{
 			Required: []string{"command"},
 		},
 		Executor: RunCommand,
+		ReadOnly: false,
+	},
+	{
+		Name: "Python",
+		Description: "执行 Python 代码(子进程方式,代码经 stdin 传给 `python -`,**不经 shell** —— " +
+			"代码里的引号/反引号/$/反斜杠原样生效,不会被 cmd/bash 解析破坏)。" +
+			"参数 code 传完整 Python 源码,可含任意换行与引号;可选 cwd 指定工作目录、timeout 指定超时(默认 60s)。" +
+			"适合数据计算 / 文本处理 / 一次性脚本等纯 Python 任务;" +
+			"需要安装依赖、启动常驻服务或组合 shell 命令时改用 Bash。" +
+			"\n注意:依赖沙箱模式执行(docker 在容器内 / native 按 OS 隔离),Python 解释器缺失或超时会明确报错。",
+		Parameters: ToolParam{
+			Type: "object",
+			Properties: map[string]PropDef{
+				"code":    {Type: "string", Description: "要执行的 Python 源码(完整代码,经 stdin 传给解释器,不经 shell)"},
+				"cwd":     {Type: "string", Description: "工作目录(可选)"},
+				"timeout": {Type: "integer", Description: "超时秒数,默认 60"},
+			},
+			Required: []string{"code"},
+		},
+		Executor: RunPython,
+		ReadOnly: false,
+	},
+	{
+		Name: "Git",
+		Description: "执行 git 命令,直调 git 可执行文件(不经 cmd/powershell —— 避免 Windows 下 PowerShell 把 native stderr 当错误流、" +
+			"污染退出码导致的'git 成功却误报失败')。\n" +
+			"**git 操作(commit/branch/merge/push/log/diff/status 等)优先用本工具,不要用 Bash 拼 git 命令**。" +
+			"命令通过 args 数组传参(无引号转义问题),cwd 指定仓库目录。\n" +
+			"exit code 语义:0 = 成功;1 = 正常结果(如 diff 有差异,非失败);≥2 = 失败(诊断保留在输出)。",
+		Parameters: ToolParam{
+			Type: "object",
+			Properties: map[string]PropDef{
+				"args":    {Type: "array", Description: "git 参数数组,如 [\"status\",\"--short\"] / [\"diff\",\"HEAD\"] / [\"commit\",\"-m\",\"msg\"]", Items: map[string]any{"type": "string"}},
+				"cwd":     {Type: "string", Description: "仓库目录(可选,缺省用当前工作目录)"},
+				"timeout": {Type: "integer", Description: "超时秒数,默认 60"},
+			},
+			Required: []string{"args"},
+		},
+		Executor: Git,
 		ReadOnly: false,
 	},
 	{

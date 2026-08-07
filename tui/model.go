@@ -2702,7 +2702,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(out) > 200 {
 				out = out[:200] + "…"
 			}
-			m.chatContent.Append("  ✗ " + msg.Name + " 失败: " + out + "\n")
+			// 失败提示带事件 ID(FailureID):UI/debug 可引用某次具体失败;无 ID 时省略。
+			idSuffix := ""
+			if msg.FailureID != "" {
+				idSuffix = " (" + msg.FailureID + ")"
+			}
+			m.chatContent.Append("  ✗ " + msg.Name + " 失败" + idSuffix + ": " + out + "\n")
 		}
 		m.currentReply.Reset()
 		m.refreshViewport()
@@ -4360,7 +4365,10 @@ func (m *model) renderChatBaseContent(w int) string {
 		var inner string
 		switch kind {
 		case kindTools:
-			inner = colorizeDiffBlock(ensureEmojiSpacingANSI(ensureEmojiSpacing(raw)))
+			// tools 段跳过 markdown(见上注释:保留多 tool 行的单 \n 语义),但超长行仍需折行——
+			// 否则失败提示/长命令会在窄终端被视口截断。ansi.Wrap 按行 wrap、不合并行,
+			// 对 ANSI 颜色序列安全(diff 染色行折行颜色延续)。
+			inner = ansi.Wrap(colorizeDiffBlock(ensureEmojiSpacingANSI(ensureEmojiSpacing(raw))), barInnerWidth(width, kind), "")
 		case kindThinking:
 			inner = dimThinking(ensureEmojiSpacing(raw), barInnerWidth(width, kind))
 		default:

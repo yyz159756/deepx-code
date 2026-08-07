@@ -106,6 +106,9 @@ type ToolCallResultMsg struct { // 工具调用返回
 	Name    string
 	Output  string
 	Success bool
+	// FailureID 失败事件的唯一身份(stream 局部递增,如 f_001);成功时为空。
+	// 供 UI/debug 引用某次具体失败,不进模型上下文(模型不消费)。
+	FailureID string
 }
 
 // ModelSwitchMsg 通知 UI 本轮起手选择的模型。每轮仅在开头发一次,本轮不再变化。
@@ -224,7 +227,8 @@ type ImageURL struct {
 }
 
 // MarshalJSON 根据是否带图,把 content 序列化成 string 或 array。
-// 同时保证 tool 消息 / 纯 assistant 工具调用消息 在 content 为空时不出现该字段。
+// content 为空时按 role 兜底:assistant(无 tool_calls)与 tool 消息必须带 content 字段(空串),
+// 否则严格后端 400(issue #94 家族);纯 assistant 工具调用消息空 content 保持省略(OpenAI 允许)。
 func (m ChatMessage) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		Role             string     `json:"role"`
@@ -255,6 +259,11 @@ func (m ChatMessage) MarshalJSON() ([]byte, error) {
 		// DeepSeek (和部分严格的 OpenAI 兼容实现) 要求 assistant 消息至少含 content 或 tool_calls。
 		// 当模型只输出 reasoning_content 时,两者都缺会导致下轮请求被 API 400 拒绝。
 		// 这里兜底发个空字符串 content 满足契约;omitempty 对非 nil interface(空字符串包裹后)不生效。
+		w.Content = ""
+	case m.Role == "tool":
+		// OpenAI 规范 tool 消息 content 必填(可为空串)。空输出(如 git status --short 在干净
+		// 工作区 exit 0、stdout 为空)序列化后缺 content 字段,严格后端直接 400
+		// "messages[N]: missing field `content`"(issue #94 家族)。兜底发空串满足契约。
 		w.Content = ""
 	}
 	return json.Marshal(w)
@@ -513,7 +522,10 @@ func coreSystemPrompt(workspace, skillCatalog string) string {
 
 # 工具使用
 - 改代码前先 inspect 相关文件、理解上下文,改动最小化。编辑时保持现有风格,不顺手做不相关的重构,默认保持向后兼容(除非用户明确要求)。
-- 查代码符号(函数/类型/方法)的定义、调用关系、实现者、继承请优先用 CodeGraph工具(更准、不误命中注释/字符串)。
+- 查代码符号(函数/类型/方法)的定义、调用关系、实现者、继承优先用 CodeGraph 工具(更准、不误命中注释/字符串)。当前工作目录是单项目根(含 .git / go.mod / package.json 等)时直接查;多项目/散目录时用 root 参数指定目标项目目录(不知项目路径先 List 根目录定位),定位不了才改用 Grep。
+- 读文件用 Read 工具(支持 offset/limit 按需读,大文件只读需要的部分、省 token),不要用 Bash cat 或 Python 读全文。
+- **执行 Python 代码 / 文本处理 / 数据计算优先用 Python 工具**(代码经 stdin 不经 shell,引号/中文/管道原样执行);Windows 下涉及引号、编码、管道、删除的复杂命令同样优先 Python 工具,不要先用 Bash 报错再换(见 bash-traps skill)。
+- **必须用 Bash 的场景**(Python 工具无此能力):①常驻/后台进程(dev server、watch 等,需 run_in_background + BashOutput/KillBash 句柄管理)②流式输出(tail -f 等)③交互式 stdin④依赖 shell 语义的命令(export/重定向/子 shell 环境/作业控制)。其余情况优先 Python 工具。
 - 需要用户在**有限、明确的选项**里做选择或拍板时(需求确认、技术选型、A/B 方案、是否包含某功能等),**必须调用 AskUser 工具弹窗让用户勾选**,可一次问多道;不要把选项写成文字列表让用户敲字回复。开放性、需要自由表达的问题才用文字提问。
 - 用户表达**持久性**偏好/约定时(「以后都…」「记住…」「不要再…」「我习惯…」「这个项目用…」),调用 **Remember** 工具写入 AGENTS.md(跨项目的习惯=global,本仓库的约定=project),长期生效;一次性指令不要记。
 
@@ -676,6 +688,10 @@ func StartStream(
 		// gateNudges = 连续被门禁挡回的次数(死循环保护,见 completionGate)。
 		var lastTodo []PlanItem
 		gateNudges := 0
+
+		// 工具失败恢复状态:失败指纹计数(执行态,非对话知识;stream 结束即重置)。
+		// 成功调用清除对应指纹;连续失败分级升级,见 failure_tracker.go。
+		ft := newFailureTracker()
 
 		// lastFile = 本轮最近操作的文件路径,给 Update 漏 path 时兜底回填(issue #81)。
 		var lastFile string
@@ -1105,22 +1121,47 @@ func StartStream(
 					result = executeTool(tc, mode, &lastFile)
 				}
 
+				// 兼容旧工具:失败未带 Error 时,Output 复制为 Error(不清空 Output)。
+				// 统一在入口做,覆盖 executeTool / Explore / OCR 等所有结果路径。
+				result = NormalizeToolResult(result)
+
 				if result.Success {
 					roundProgress = true
+					// 成功 = 该工具+路径的假设被验证,清除失败计数,避免后续失败被误判升级。
+					ft.clearByTool(tc)
+				}
+				// 失败处理提前:handleToolFailure 生成 FailureID(事件身份),供 ToolCallResultMsg 携带
+				// (UI/debug 引用);nudge 注入在 tool 消息回填后(模型下一轮看到)。
+				var failNudge, failID string
+				var failAbort bool
+				if !result.Success {
+					failNudge, failID, failAbort = handleToolFailure(tc, result, ft)
 				}
 				ch <- ToolCallResultMsg{
-					Name:    tc.Function.Name,
-					Output:  result.Output,
-					Success: result.Success,
+					Name:      tc.Function.Name,
+					Output:    result.Output,
+					Success:   result.Success,
+					FailureID: failID,
 				}
 				convo = append(convo, ChatMessage{
 					Role:       "tool",
 					ToolCallID: tc.ID,
 					Name:       tc.Function.Name,
+					// 渲染:成功 = Output;失败 = Failure Protocol(<tool_failure>,见 RenderToolResultContent)。
 					// 本轮合计上限:单条已被 clampToolOutput 限到 96KB,这里再按「本轮所有工具结果合计」收口,
 					// 防止一轮并发多条把上下文顶爆(issue #135)。只截入历史的内容,UI(上方 ToolCallResultMsg)仍展示完整结果。
-					Content: clampTurnToolOutput(tc.Function.Name, result.Output, &turnToolBytes),
+					Content: clampTurnToolOutput(tc.Function.Name, RenderToolResultContent(result), &turnToolBytes),
 				})
+				// 失败恢复:注入 user-role 引导(不要原样重试,先诊断);同指纹连续失败分级升级,
+				// 达到上限时终止循环(仿 errTruncatedToolLoop 的退出方式)。
+				if !result.Success {
+					if failAbort {
+						ch <- StreamErrMsg{errRepeatedToolFailureLoop}
+						return
+					} else if failNudge != "" {
+						convo = append(convo, ChatMessage{Role: "user", Content: failNudge})
+					}
+				}
 			}
 			// 视觉模型下被 redirect 的 OCR：把对应图片作为独立 user 消息追加进对话（带 ImagePaths，
 			// renderConvoImages 下一轮按当轮模型能力渲染成 base64 / 路径+OCR，切模型也安全）。
@@ -1653,14 +1694,14 @@ func allowedInMode(_ tools.Tool, _ AgentMode) bool {
 
 // isReviewable 判断工具在 review 模式下是否需要人工审核。
 func isReviewable(name string) bool {
-	return name == "Write" || name == "Update" || name == "Bash"
+	return name == "Write" || name == "Update" || name == "Bash" || name == "Python"
 }
 
 // blockedInPlan 判断工具在 plan 模式下是否被禁止执行(只读规划,禁一切写/副作用操作)。
 // plan 模式不裁剪工具表(保持 prefix cache 稳定),全靠 system prompt 让 LLM 自觉;
-// 这里是执行层的硬兜底:模型不听话直接调 Write/Update/Bash 时(issue #108),拦下来。
+// 这里是执行层的硬兜底:模型不听话直接调 Write/Update/Bash/Python 时(issue #108),拦下来。
 func blockedInPlan(name string) bool {
-	return name == "Write" || name == "Update" || name == "Bash"
+	return name == "Write" || name == "Update" || name == "Bash" || name == "Python"
 }
 
 // fileToolNames 是用于维护 lastFile(模型当前正在编辑的文件)的工具,给 Update 漏 path 时兜底。
