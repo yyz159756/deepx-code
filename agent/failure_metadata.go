@@ -14,32 +14,36 @@ const (
 	RecoveryAbort              RecoveryAction = "abort"
 )
 
+// failurePolicy 是单一失败类别的策略:是否可重试 + 结构化恢复方向。
+type failurePolicy struct {
+	retryable bool
+	action    RecoveryAction
+}
+
+// failurePolicies 集中全部失败类别的策略映射(机制/策略分离):
+// 策略(哪些类别可重试、恢复方向)只在此一张表维护,IsRetryable/GetRecoveryAction 查表取值,
+// 改策略只动这一处,不散落 switch。未列入的类别(unknown 等)缺省 = {false, abort},
+// 与历史 default 分支语义一致。
+var failurePolicies = map[tools.FailureCategory]failurePolicy{
+	tools.FailureCategoryNotFound:         {retryable: false, action: RecoveryInspectBeforeRetry},
+	tools.FailureCategoryInvalidArgument:  {retryable: false, action: RecoveryModifyArguments},
+	tools.FailureCategoryPermissionDenied: {retryable: false, action: RecoveryRequestPermission},
+	tools.FailureCategoryExecution:        {retryable: false, action: RecoveryInspectBeforeRetry},
+	tools.FailureCategoryTimeout:          {retryable: true, action: RecoveryRetryWithBackoff},
+	tools.FailureCategoryNetwork:          {retryable: true, action: RecoveryRetryWithBackoff},
+}
+
 // IsRetryable 判断该失败类别是否存在"继续尝试的可能"(通过调整条件/等待/改变恢复路径后重试)。
 // 注意:retryable=true ≠ 允许原参数立即重试 —— 行为控制由 FailureTracker/nudge(Phase 1)负责,
 // 这里只表达"是否存在后续恢复可能性"。保守默认:execution_error 这类杂项桶一律 false。
 func IsRetryable(category tools.FailureCategory) bool {
-	switch category {
-	case tools.FailureCategoryTimeout, tools.FailureCategoryNetwork:
-		return true
-	default:
-		return false
-	}
+	return failurePolicies[category].retryable
 }
 
 // GetRecoveryAction 返回失败类别的结构化恢复方向(纯函数,不依赖 tracker)。
 func GetRecoveryAction(category tools.FailureCategory) RecoveryAction {
-	switch category {
-	case tools.FailureCategoryNotFound:
-		return RecoveryInspectBeforeRetry
-	case tools.FailureCategoryInvalidArgument:
-		return RecoveryModifyArguments
-	case tools.FailureCategoryPermissionDenied:
-		return RecoveryRequestPermission
-	case tools.FailureCategoryExecution:
-		return RecoveryInspectBeforeRetry
-	case tools.FailureCategoryTimeout, tools.FailureCategoryNetwork:
-		return RecoveryRetryWithBackoff
-	default:
-		return RecoveryAbort
+	if p, ok := failurePolicies[category]; ok {
+		return p.action
 	}
+	return RecoveryAbort
 }
