@@ -59,8 +59,11 @@ func Git(args map[string]any) ToolResult {
 		_ = cmd.Process.Kill()
 		<-done
 		return ToolResult{
-			Output:  fmt.Sprintf("%s\n%s\n[exit] 超时(%ds)", stdout.String(), stderr.String(), timeout),
-			Success: false,
+			Output:          fmt.Sprintf("%s\n%s\n[exit] 超时(%ds)", stdout.String(), stderr.String(), timeout),
+			Success:         false,
+			Error:           fmt.Sprintf("git 命令超时(%ds)", timeout),
+			FailureCategory: FailureCategoryTimeout,
+			FailureHint:     "git 命令超时。检查是否在等待输入 / 仓库是否卡在慢挂载点(如 WSL /mnt/c),或适当加大 timeout,不要原样重试。",
 		}
 	}
 }

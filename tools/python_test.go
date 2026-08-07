@@ -56,9 +56,41 @@ func TestRunPython_EmptyCode(t *testing.T) {
 	if res.Success {
 		t.Fatal("空 code 应失败")
 	}
+	if res.FailureCategory != FailureCategoryInvalidArgument {
+		t.Errorf("空 code 应为 invalid_argument,got %q", res.FailureCategory)
+	}
+	if res.Error == "" {
+		t.Error("空 code 应带 Error 摘要")
+	}
 }
 
+// TestRunPython_TimeoutResultCategory 快速测超时"状态转换逻辑"(类别/Error/Hint 填充):
+// 纯函数 pythonTimeoutResult,不真实等 timeout 秒 —— 敏捷开发下本地秒级跑完。
+func TestRunPython_TimeoutResultCategory(t *testing.T) {
+	res := pythonTimeoutResult("已有部分输出", 30)
+	if res.Success {
+		t.Fatal("超时应失败")
+	}
+	if !strings.Contains(res.Output, "超时") {
+		t.Errorf("输出应含超时标记,got: %q", res.Output)
+	}
+	if res.FailureCategory != FailureCategoryTimeout {
+		t.Errorf("超时结果应为 timeout,got %q", res.FailureCategory)
+	}
+	if res.Error == "" {
+		t.Error("超时应带 Error 摘要")
+	}
+	if res.FailureHint == "" {
+		t.Error("超时应带 FailureHint")
+	}
+}
+
+// TestRunPython_Timeout 真实超时属系统行为验证:进程确实被杀、输出被保留。
+// 本地敏捷开发用 go test -short 跳过(状态转换逻辑已由上方纯函数测试覆盖),CI 全量验证。
 func TestRunPython_Timeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("真实超时行为留 CI 全量验证,本地 -short 跳过")
+	}
 	hostPythonOrSkip(t)
 	res := RunPython(map[string]any{"code": `import time; time.sleep(5)`, "timeout": 1})
 	if res.Success {
@@ -66,6 +98,12 @@ func TestRunPython_Timeout(t *testing.T) {
 	}
 	if !strings.Contains(res.Output, "超时") {
 		t.Fatalf("应含超时标记,got: %q", res.Output)
+	}
+	if res.FailureCategory != FailureCategoryTimeout {
+		t.Errorf("超时应为 timeout,got %q", res.FailureCategory)
+	}
+	if res.Error == "" {
+		t.Error("超时应带 Error 摘要")
 	}
 }
 

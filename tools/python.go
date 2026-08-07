@@ -21,11 +21,22 @@ import (
 func RunPython(args map[string]any) ToolResult {
 	code, _ := args["code"].(string)
 	if strings.TrimSpace(code) == "" {
-		return ToolResult{Output: "错误: code 参数为空", Success: false}
+		return ToolResult{
+			Output:          "错误: code 参数为空",
+			Success:         false,
+			Error:           "code 参数为空",
+			FailureCategory: FailureCategoryInvalidArgument,
+		}
 	}
 	// 沙箱预检,与 RunCommand 同一入口:docker/OS 隔离放行;Windows 等无 OS 隔离平台跑软黑名单。
 	if err := SandboxCheck(code); err != nil {
-		return ToolResult{Output: "🛡️ " + err.Error(), Success: false}
+		return ToolResult{
+			Output:          "🛡️ " + err.Error(),
+			Success:         false,
+			Error:           "沙箱拒绝执行该 Python 代码",
+			FailureCategory: FailureCategoryPermissionDenied,
+			FailureHint:     "沙箱策略拒绝该代码(黑名单命中)。如确需运行,请切换到 docker 沙箱(/sandbox docker)或修改代码规避被禁模式。",
+		}
 	}
 	cwd, _ := args["cwd"].(string)
 	timeout := toInt(args["timeout"], 60)
@@ -35,14 +46,25 @@ func RunPython(args map[string]any) ToolResult {
 
 	cmd, err := pythonCmd(code, cwd)
 	if err != nil {
-		return ToolResult{Output: "🛡️ 沙箱启动失败: " + err.Error(), Success: false}
+		return ToolResult{
+			Output:          "🛡️ 沙箱启动失败: " + err.Error(),
+			Success:         false,
+			Error:           "沙箱/解释器启动失败",
+			FailureCategory: FailureCategoryExecution,
+			FailureHint:     "沙箱或 Python 解释器无法启动。检查 docker 容器状态(/sandbox docker)或 Python 是否在 PATH,对症处理后重试。",
+		}
 	}
 	setPgid(cmd) // 进程组化:超时路径能整组杀,不留孤儿
 
 	buf := &lockedBuffer{}
 	readerDone, err := startWithPipe(cmd, buf)
 	if err != nil {
-		return ToolResult{Output: fmt.Sprintf("启动失败: %v", err), Success: false}
+		return ToolResult{
+			Output:          fmt.Sprintf("启动失败: %v", err),
+			Success:         false,
+			Error:           "进程启动失败",
+			FailureCategory: FailureCategoryExecution,
+		}
 	}
 
 	waitErrCh := make(chan error, 1)
@@ -60,8 +82,20 @@ func RunPython(args map[string]any) ToolResult {
 		// 硬超时:杀进程组,等 wait 收尾(避免 goroutine 泄漏),返回已有输出 + 超时标记。
 		_ = killProc(cmd)
 		<-waitErrCh
-		out := buf.drain()
-		return ToolResult{Output: out + fmt.Sprintf("\n超时(%ds)", timeout), Success: false}
+		return pythonTimeoutResult(buf.drain(), timeout)
+	}
+}
+
+// pythonTimeoutResult 构造超时失败结果(纯函数,无副作用)。
+// 单独提取:状态转换逻辑(类别/Error/Hint)可快速单测,不必真实等 timeout 秒
+// (真实超时属系统行为,留 CI 全量验证,本地敏捷开发跑 go test -short)。
+func pythonTimeoutResult(out string, timeout int) ToolResult {
+	return ToolResult{
+		Output:          out + fmt.Sprintf("\n超时(%ds)", timeout),
+		Success:         false,
+		Error:           fmt.Sprintf("python 执行超时(%ds)", timeout),
+		FailureCategory: FailureCategoryTimeout,
+		FailureHint:     "Python 执行超时。检查代码是否死循环 / 等待输入,或适当加大 timeout,不要原样重试。",
 	}
 }
 

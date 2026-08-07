@@ -47,6 +47,13 @@ func TestGit_StatusSuccess(t *testing.T) {
 	if !r.Success {
 		t.Fatalf("status 应成功,got Success=%v Output=%q", r.Success, r.Output)
 	}
+	// 干净仓库 status --short 输出为空 —— 这是合法成功结果,不是错误。
+	// 该空输出入历史后,agent 层序列化必须保证 tool 消息仍带 content 字段,
+	// 否则严格后端 400 "missing field `content`"(见 agent/marshal_test.go 的
+	// TestMarshalToolEmptyContentEmitsEmptyString)。
+	if r.Output != "" {
+		t.Fatalf("干净仓库 status --short 输出应为空,got %q", r.Output)
+	}
 }
 
 func TestGit_LogOutput(t *testing.T) {
