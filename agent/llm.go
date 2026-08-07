@@ -889,6 +889,9 @@ func StartStream(
 			// pendingImageInjects:本轮被 redirect 的 OCR(视觉模型 + 真实外部图)对应的图片路径,
 			// 在 tc 循环收尾处统一追加成带图 user 消息,让模型下一轮直接看图(见 case "OCR",issue #194)。
 			var pendingImageInjects []string
+			// pendingNudges:本轮失败工具的恢复引导文本(failNudge),统一收集、所有 tool 结果之后追加,
+			// 避免插在 tool 组中间被 sanitizeToolPairs 拆散配对(见 tc 循环内失败分支注释)。
+			var pendingNudges []string
 			for _, tc := range toolCalls {
 				// review 模式:对 Write/Update/Bash 发起审核。
 				// Workflow(run) 无论何种模式都强制确认:它会执行模型生成的脚本(进而派子 agent)。
@@ -1152,16 +1155,22 @@ func StartStream(
 					// 防止一轮并发多条把上下文顶爆(issue #135)。只截入历史的内容,UI(上方 ToolCallResultMsg)仍展示完整结果。
 					Content: clampTurnToolOutput(tc.Function.Name, RenderToolResultContent(result), &turnToolBytes),
 				})
-				// 失败恢复:注入 user-role 引导(不要原样重试,先诊断);同指纹连续失败分级升级,
-				// 达到上限时终止循环(仿 errTruncatedToolLoop 的退出方式)。
+				// 失败恢复:引导文本(不要原样重试,先诊断)不即时注入 —— 插在 tool 组中间会被
+				// sanitizeToolPairs 的 user 分支拆散配对(悬挂 tool_call → 400,write-elision 执行记录
+				// 同款 bug)。统一收集,循环结束后追加到所有 tool 结果之后(与 pendingImageInjects 同理)。
+				// 同指纹连续失败分级升级,达到上限时终止循环(仿 errTruncatedToolLoop 的退出方式)。
 				if !result.Success {
 					if failAbort {
 						ch <- StreamErrMsg{errRepeatedToolFailureLoop}
 						return
 					} else if failNudge != "" {
-						convo = append(convo, ChatMessage{Role: "user", Content: failNudge})
+						pendingNudges = append(pendingNudges, failNudge)
 					}
 				}
+			}
+			// 失败恢复引导:统一追加在所有 tool 结果之后(见上方 tc 循环内注释)。
+			for _, n := range pendingNudges {
+				convo = append(convo, ChatMessage{Role: "user", Content: n})
 			}
 			// 视觉模型下被 redirect 的 OCR：把对应图片作为独立 user 消息追加进对话（带 ImagePaths，
 			// renderConvoImages 下一轮按当轮模型能力渲染成 base64 / 路径+OCR，切模型也安全）。
