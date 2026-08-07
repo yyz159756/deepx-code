@@ -120,7 +120,7 @@ func TestRewrite_DoesNotMutateOriginal(t *testing.T) {
 }
 
 func TestRewrite_MixedBatch(t *testing.T) {
-	bigWrite := `{"path":"big.go","content":` + jsonStr(strings.Repeat("a", 600)) + `}`
+	bigWrite := `{"path":"big.go","content":` + jsonStr(strings.Repeat("a", 4000)) + `}`
 	tcs := []ToolCall{
 		mkTC("Write", bigWrite),
 		mkTC("Update", `{"path":"u.go","old_string":"a","new_string":"b"}`),
