@@ -59,6 +59,20 @@ func TestRenderToolResultContent(t *testing.T) {
 	}
 }
 
+// 旧工具(NormalizeToolResult 复制 Error=Output):summary 占位,避免与 diagnostic 重复。
+func TestRenderToolFailureProtocol_SummaryDedup(t *testing.T) {
+	r := tools.ToolResult{Success: false, Error: strings.Repeat("e", 300), Output: strings.Repeat("e", 300)}
+	got := RenderToolFailureProtocol(r)
+	if !strings.Contains(got, "—(同诊断,见下)") {
+		t.Fatalf("Error==Output 时 summary 应占位去重,got:\n%s", got)
+	}
+	// 不同时正常显示摘要
+	r2 := tools.ToolResult{Success: false, Error: "boom", Output: "stack trace"}
+	if got2 := RenderToolFailureProtocol(r2); !strings.Contains(got2, "summary:\nboom") {
+		t.Fatalf("Error≠Output 时 summary 应正常显示,got:\n%s", got2)
+	}
+}
+
 // 不回归保证:失败时 Error(原因)与 Output(诊断)都不丢失(在协议字段内)。
 func TestRenderToolResultContent_NoInfoLoss(t *testing.T) {
 	r := tools.ToolResult{Success: false, Error: "exit status 1", Output: "stack trace"}
