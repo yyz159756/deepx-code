@@ -19,7 +19,8 @@ import (
 // exit code 语义(git 约定,与通用 Bash 语义不同):
 //
 //	0  → Success=true,Output=stdout
-//	1  → Success=true(如 diff 有差异 / 无匹配是正常结果),Output 带 "[exit] 1" 标记
+//	1  → 查询类命令(diff/grep/log/show/status 等)= 正常结果(有差异/无匹配),Success=true;
+//	     操作类命令(checkout/merge/reset/apply 等)= 操作失败,Success=false
 //	≥2 → Success=false(真错误),Output=stdout+stderr(诊断保留),带 "[exit] N"
 func Git(args map[string]any) ToolResult {
 	argv, _ := args["args"].([]any)
@@ -45,6 +46,7 @@ func Git(args map[string]any) ToolResult {
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
+	setPgid(cmd) // 进程组化:超时路径能整组杀,不留孤儿(与 Python 工具一致)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -54,9 +56,9 @@ func Git(args map[string]any) ToolResult {
 
 	select {
 	case err := <-done:
-		return formatGitResult(stdout.String(), stderr.String(), err)
+		return formatGitResult(stdout.String(), stderr.String(), err, gitArgs)
 	case <-time.After(time.Duration(timeout) * time.Second):
-		_ = cmd.Process.Kill()
+		_ = killProc(cmd) // 整组杀(含 git 钩子/子进程),不留孤儿
 		<-done
 		return ToolResult{
 			Output:          fmt.Sprintf("%s\n%s\n[exit] 超时(%ds)", stdout.String(), stderr.String(), timeout),
@@ -68,14 +70,46 @@ func Git(args map[string]any) ToolResult {
 	}
 }
 
+// gitExit1Normal:exit 1 视为"正常结果"的查询类命令(有差异/无匹配)。
+// 操作类命令(checkout/merge/reset/apply/cherry-pick/rebase 等)exit 1 = 操作失败,必须按失败处理
+// (git 对"目标不存在/冲突/无更新"也返回 1,统一当成功会吞掉真实错误)。
+var gitExit1Normal = map[string]bool{
+	"diff": true, "diff-tree": true, "diff-index": true, "diff-files": true,
+	"grep": true, "log": true, "show": true, "status": true, "ls-files": true,
+}
+
+// gitOptTakesValue:带值的全局选项(跳过后面的值再找子命令)。
+var gitOptTakesValue = map[string]bool{
+	"-C": true, "-c": true, "--git-dir": true, "--work-tree": true,
+	"--namespace": true, "--config-env": true, "--exec-path": true, "--html-path": true,
+}
+
+// gitExit1IsNormal 跳过全局选项(-C/-c/--no-pager/--git-dir 等)后按首个子命令判断。
+func gitExit1IsNormal(argv []string) bool {
+	for i := 0; i < len(argv); i++ {
+		a := argv[i]
+		if a == "--" { // 子命令分隔符之后不再有子命令
+			return false
+		}
+		if strings.HasPrefix(a, "-") {
+			if gitOptTakesValue[a] {
+				i++ // 跳过选项的值(如 -C /tmp)
+			}
+			continue
+		}
+		return gitExit1Normal[a]
+	}
+	return false
+}
+
 // formatGitResult 按 git exit code 语义格式化结果。
-func formatGitResult(stdout, stderr string, err error) ToolResult {
+func formatGitResult(stdout, stderr string, err error, argv []string) ToolResult {
 	if err == nil {
 		// exit 0:成功
 		return ToolResult{Output: strings.TrimRight(stdout, "\n"), Success: true}
 	}
-	if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
-		// git exit 1:正常结果(如 diff 有差异 / grep 无匹配),不是失败
+	if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 && gitExit1IsNormal(argv) {
+		// 查询类命令 exit 1:正常结果(如 diff 有差异 / grep 无匹配),不是失败
 		out := strings.TrimRight(stdout, "\n")
 		if s := strings.TrimRight(stderr, "\n"); s != "" {
 			if out != "" {
