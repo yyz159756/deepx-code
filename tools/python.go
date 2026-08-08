@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -86,6 +87,15 @@ func RunPython(args map[string]any) ToolResult {
 	}
 }
 
+// containerHasPython 检查沙箱容器内是否有 python3/python(默认镜像 ubuntu:24.04 无)。
+func containerHasPython(name string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", "exec", name, "sh", "-c",
+		"command -v python3 || command -v python").CombinedOutput()
+	return err == nil && strings.TrimSpace(string(out)) != ""
+}
+
 // pythonTimeoutResult 构造超时失败结果(纯函数,无副作用)。
 // 单独提取:状态转换逻辑(类别/Error/Hint)可快速单测,不必真实等 timeout 秒
 // (真实超时属系统行为,留 CI 全量验证,本地敏捷开发跑 go test -short)。
@@ -107,6 +117,12 @@ func pythonCmd(code, cwd string) (*exec.Cmd, error) {
 		name, err := EnsureDockerContainer()
 		if err != nil {
 			return nil, err
+		}
+		// 预检容器内解释器:默认镜像 ubuntu:24.04 不含 python3/python,不预检会把失败
+		// (2>/dev/null 吞掉 stderr)变成"空输出",用户无从诊断。
+		if !containerHasPython(name) {
+			return nil, fmt.Errorf("沙箱容器缺少 Python 解释器(镜像 %s 无 python3/python),请用 /sandbox image 换带 python 的镜像(如 python:3.12-slim)",
+				SandboxDockerImage())
 		}
 		c := exec.Command("docker", "exec", "-i", "-w", containerWorkdir(cwd), name, "sh", "-c",
 			"exec python3 - 2>/dev/null || exec python -")
