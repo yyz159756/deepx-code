@@ -61,3 +61,22 @@ func TestMarshalUserMessageStillOmits(t *testing.T) {
 		t.Errorf("system with empty content should still be omitted, got: %s", string(b))
 	}
 }
+
+// TestMarshalToolEmptyContentEmitsEmptyString 防止回归:
+// tool 消息 content 为空(如 git status --short 在干净工作区输出为空、exit 0)时,序列化必须
+// 含 content 字段(空串)——OpenAI 规范 tool 消息 content 必填,缺字段会被严格后端 400
+// "messages[N]: missing field `content`"(issue #94 家族)。
+func TestMarshalToolEmptyContentEmitsEmptyString(t *testing.T) {
+	m := ChatMessage{Role: "tool", ToolCallID: "call_1", Content: ""}
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal err: %v", err)
+	}
+	s := string(b)
+	if !strings.Contains(s, `"content":""`) {
+		t.Errorf("expected tool message to emit content field (empty string), got: %s", s)
+	}
+	if !strings.Contains(s, `"tool_call_id":"call_1"`) {
+		t.Errorf("expected tool_call_id present, got: %s", s)
+	}
+}

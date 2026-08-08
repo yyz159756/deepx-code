@@ -460,6 +460,32 @@ func (m *Manager) Append(role, content string) error {
 	return enc.Encode(Entry{Ts: time.Now(), Role: role, Content: content})
 }
 
+// errorsPath 返回今天的错误日志路径(errors-YYYY-MM-DD.log)。
+func (m *Manager) errorsPath() string {
+	return filepath.Join(m.rootDir, "errors-"+time.Now().Format("2006-01-02")+".log")
+}
+
+// AppendError 把一次运行时错误(如 HTTP 400 / 空响应循环)追加进今天的错误日志。
+// 与 jsonl 分离:jsonl 只记对话且失败轮不留盘(见 tui/model.go 的落盘策略),
+// 错误日志独立留痕,便于事后排查"UI 报错但 session 记录里没有"的缺口。
+// 不阻塞主流程:写失败静默(与 SaveUsage 同策略)。
+func (m *Manager) AppendError(err error) {
+	if err == nil {
+		return
+	}
+	f, oerr := os.OpenFile(m.errorsPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if oerr != nil {
+		return
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	_ = enc.Encode(map[string]string{
+		"ts":    time.Now().Format(time.RFC3339),
+		"error": err.Error(),
+	})
+}
+
+
 // LoadRecentTurns 从最新日期文件倒着读,凑足 n 个 user→assistant 对停。
 // 返回按时间正序的 entries,可直接喂给 LLM history。
 //
