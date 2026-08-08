@@ -172,6 +172,7 @@ var Tools = []Tool{
 			Type: "object",
 			Properties: map[string]PropDef{
 				"op":    {Type: "string", Enum: []string{"symbols", "def", "refs", "callers", "callees", "implementers", "subtypes", "supertypes", "impact", "imports", "outline", "reindex"}, Description: "操作类型"},
+				"root":  {Type: "string", Description: "可选:指定项目根(绝对路径)建图查询,缺省用当前 workspace 根。多项目 workspace(如 workspace 是多个项目的父目录)下用它对单个项目建图,此时 path 参数相对该 root;不传则在 workspace 根上查(多项目时可能不全,输出会带警告)"},
 				"name":  {Type: "string", Description: "符号名;def/refs/callers/callees/implementers/subtypes/supertypes/impact 必填,支持 \"Type.Method\" 限定名;symbols 作模糊过滤"},
 				"path":  {Type: "string", Description: "outline/imports 用:相对 workspace 的文件路径"},
 				"kind":  {Type: "string", Enum: []string{"func", "method", "type", "var", "const", "field"}, Description: "可选,按符号种类过滤"},
