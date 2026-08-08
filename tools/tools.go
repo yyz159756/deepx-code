@@ -345,7 +345,8 @@ var Tools = []Tool{
 			"污染退出码导致的'git 成功却误报失败')。\n" +
 			"**git 操作(commit/branch/merge/push/log/diff/status 等)优先用本工具,不要用 Bash 拼 git 命令**。" +
 			"命令通过 args 数组传参(无引号转义问题),cwd 指定仓库目录。\n" +
-			"exit code 语义:0 = 成功;1 = 正常结果(如 diff 有差异,非失败);≥2 = 失败(诊断保留在输出)。",
+			"exit code 语义:0 = 成功;1 = **查询类命令**(diff/grep/log/show/status 等)的正常结果(有差异/无匹配,非失败)," +
+			"**操作类命令**(checkout/merge/reset/apply 等)exit 1 = 操作失败;≥2 = 失败(诊断保留在输出)。",
 		Parameters: ToolParam{
 			Type: "object",
 			Properties: map[string]PropDef{
