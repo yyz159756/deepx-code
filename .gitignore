@@ -52,3 +52,7 @@ promo
 .notes
 # playwright
 .playwright-mcp
+# 本地开发过程记录(不提交)
+openspec/
+docs/
+PR.md

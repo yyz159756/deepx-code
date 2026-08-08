@@ -14,11 +14,6 @@
 
 </div>
 
-> [!WARNING]
-> # 🚧 本仓库是官方 deepx-code 的**变更版(Fork)**
->
-> 本仓库基于官方 [itmisx/deepx-code](https://github.com/itmisx/deepx-code) 深度改造,**对内部结构有大量改动**(新增工具失败恢复协议 / Git / Python 工具 / openspec 规格基线等),**与官方版本存在显著差异**。安装脚本与官方共用,但功能行为、目录结构、配置方式可能不同,请勿以官方文档预期本版本。
-
 > [!TIP]
 > **⚡ 长会话实测 prompt-cache 命中 ~99%**（真实 session：41,591 tokens 中 41,472 命中）。DeepSeek 对命中缓存的输入按未命中价的几十分之一计费（[官方定价](https://api-docs.deepseek.com/quick_start/pricing)），长跑几乎不为重复的上下文重复付费。
 
@@ -39,9 +34,6 @@
 - **🛡️ 审核模式** —— 写文件 / 执行 Shell 默认需人工确认，安全可控。
 - **🧱 原生 OS 级沙箱** —— 默认 `native` 做 OS 隔离（macOS Seatbelt、Linux bubblewrap，写操作限定 workspace + 进程隔离；无 OS 机制平台退软策略），也支持 `docker` 容器隔离或 `off` 关闭，不依赖容器也能给 agent 划安全边界。
 - **🎛️ 工作模式（working mode）** —— 一个命令锁定方法论：`karpathy`（务实工匠）/ `openspec`（规格驱动）/ `superpowers`（全流程严谨）；三种互斥，选一禁两、杜绝方法论混搭，切换存入会话、每轮注入不污染历史。
-- **🔧 Git 工具** —— `exec` 直调 git 可执行文件,不经 cmd/powershell(规避 PowerShell 把 native stderr 当错误流导致的"成功却误报失败");exit code 按 git 语义(0/1 成功、≥2 失败),`Git (status --short)` 一行验证仓库状态。
-- **🐍 Python 工具** —— 代码经 stdin 交给解释器执行,**不经 shell**(引号 / `$` / 反引号原样进解释器,Windows 无转义坑);plan/review 模式硬拦截,沙箱策略兜底。
-- **🩹 工具失败恢复协议** —— 失败结果带机器可读类别(`FailureCategory`)+ 摘要(`Error`)+ 原始诊断(`Output`),模型侧渲染为 `<tool_failure>` 协议(status/category/retryable/recovery_action/summary/diagnostic);配套指纹分级复读止损与失败事件唯一 ID(FailureID),UI 可定位。
 - **⚡ 非交互 `exec` 模式** —— `deepx exec "任务"` 一次性跑完直接把结果打到 stdout，支持管道喂数据、重定向输出、塞进脚本 / CI / cron，**不必进 TUI**（用法见下方「非交互执行」一节）。
 
 ## 📊 对比 Claude Code
@@ -64,6 +56,12 @@
 
 **1. 安装**
 
+macOS / Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/itmisx/deepx-code/main/scripts/install.sh | bash && exec $SHELL
+```
+
 Windows(PowerShell):
 
 ```powershell
@@ -72,11 +70,19 @@ irm https://raw.githubusercontent.com/itmisx/deepx-code/main/scripts/install.ps1
 
 🇨🇳 国内用户可用 **Gitee 镜像**加速(源码 + 二进制都从 Gitee 拉,之后 `deepx upgrade` 自动走 Gitee):
 
+macOS / Linux:
+
+```bash
+curl -fsSL https://gitee.com/itmisx/deepx-code/raw/main/scripts/install.sh | SOURCE=gitee bash && exec $SHELL
+```
+
+Windows PowerShell
+
 ```powershell
 $env:SOURCE='gitee'; irm https://gitee.com/itmisx/deepx-code/raw/main/scripts/install.ps1 | iex
 ```
 
-安装到 `%LOCALAPPDATA%\Programs\deepx`，随时用 `deepx upgrade` 升级。
+安装到 `~/.local/bin/deepx`，随时用 `deepx upgrade` 升级。
 
 **2. 在终端里进入项目并启动**
 
@@ -219,8 +225,6 @@ CreatePlan
 | 代码图谱 | `CodeGraph`                        |            ✓ |  ✓   |   ✓    |
 | 文件写入 | `Write` `Update`                   |            ✗ |  ✓   |   ⏳   |
 | Shell    | `Bash`                             |            ✗ |  ✓   |   ⏳   |
-| Git      | `Git`（exec 直调，args 数组）       |            ✓ |  ✓   |   ✓    |
-| Python   | `Python`（代码片段）                |            ✗ |  ✓   |   ⏳   |
 | 联网     | `Search` `Fetch`                   |            ✓ |  ✓   |   ✓    |
 | 记忆     | `Memory`                           |            ✓ |  ✓   |   ✓    |
 | 技能     | `LoadSkill`                        |            ✓ |  ✓   |   ✓    |
@@ -304,19 +308,13 @@ global 级     ~/.agents/skills/ → ~/.claude/skills/ → ~/.deepx/skills/
 ```
 deepx/
 ├── main.go
-├── agent/      StartStream 工具循环 + 路由 + DAG 调度 + 子 agent + 工具失败恢复协议
+├── agent/      StartStream 工具循环 + 路由 + DAG 调度 + 子 agent
 ├── config/     ~/.deepx/model.yaml 读写
 ├── session/    gob 持久化 + JSONL 日志 + 会话压缩状态
-├── tools/      全部工具实现(读写 / Bash / Git / Python / 搜索 / OCR / Memory / Skill / Plan / CodeGraph)
+├── tools/      全部工具实现（读写 / 搜索 / OCR / Memory / Skill / Plan / CodeGraph）
 ├── codegraph/  代码图谱：跳定义 / 找调用 / 继承实现 / 影响面
 ├── skill/      多路径 skill 发现与加载
 ├── ocr/        PaddleOCR 包装（ONNX Runtime）
-├── mcp/        MCP client 与 server 管理
-├── workflow/   Workflow JS 编排（可复用多子 agent 脚本）
-├── web/        Web 面板（远程控制 / 实时事件）
-├── openspec/   规格驱动开发（specs 基线 + changes 提案/归档）
-├── docs/       设计文档与报告
-├── assets/     资源（demo 动图等）
 ├── tui/        bubbletea TUI（输入 / 渲染 / 剪贴板 / 选中 / 仪表盘）
 └── scripts/    安装脚本
 ```
@@ -331,7 +329,12 @@ deepx/
 
 ## 🩹 卸载
 
-Windows：删除 `%LOCALAPPDATA%\Programs\deepx` 和 `%USERPROFILE%\.deepx`
+```bash
+# macOS / Linux
+rm -f ~/.local/bin/deepx && rm -rf ~/.deepx
+
+# Windows：删除 %LOCALAPPDATA%\Programs\deepx 和 %USERPROFILE%\.deepx
+```
 
 ## 📄 License
 
