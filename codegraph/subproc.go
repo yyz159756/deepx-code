@@ -45,7 +45,9 @@ type buildEnvelope struct {
 // exec.CommandContext 超时只 Kill 顶层进程,go list 等孙进程会残留成孤儿并堆积
 // (实测:go test 超时强杀后 92+ 个残留进程榨干系统)。Windows 用 taskkill /T 连树杀
 // (与 tools/bg_windows.go 同款,但 codegraph 不能 import tools 防循环,故自带);
-// Unix 杀顶层,孙进程依赖 go/packages 在 ctx 取消时自清。进程未启动/已退出时幂等。
+// Unix 杀进程组(setChildProcessGroup 保证组 ID = 顶层 pid,连孙进程一起杀——
+// 父进程杀掉子进程后,子进程内部的 go list 无法收到取消信号,只杀顶层会残留孤儿)。
+// 进程未启动/已退出时幂等。
 func killTree(cmd *exec.Cmd) {
 	if cmd.Process == nil {
 		return
@@ -54,7 +56,7 @@ func killTree(cmd *exec.Cmd) {
 		_ = exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
 		return
 	}
-	_ = cmd.Process.Kill()
+	killTreeUnix(cmd)
 }
 
 // BuildAndEncode 是子进程入口(deepx __codegraph-build <root> <mode>):在本进程建图,
@@ -116,6 +118,7 @@ func buildViaSubprocess(root, mode string) (*Graph, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), subprocBuildTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, self, "__codegraph-build", root, mode)
+	setChildProcessGroup(cmd) // Unix:独立进程组(孙进程继承,killTree 可整组杀);Windows:no-op
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = io.Discard
