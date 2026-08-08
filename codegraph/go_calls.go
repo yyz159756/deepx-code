@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"go/types"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -58,7 +59,14 @@ func goPreciseCallEdges(root string) ([]Edge, bool) {
 			continue
 		}
 		for _, file := range pkg.Syntax {
-			rel := toRel(root, fset.Position(file.Pos()).Filename)
+			fname := fset.Position(file.Pos()).Filename
+			// Test variant 包(IDs 形如 "pkg [pkg.test]")重复包含普通文件——只收集其 _test.go
+			// 的边(测试函数的调用边),普通文件的边已由普通包(pkg.ID == pkg.PkgPath)收集,
+			// 重复收集会产生重复 Edge(callers/refs 返回重复条目)。
+			if pkg.ID != pkg.PkgPath && !strings.HasSuffix(fname, "_test.go") {
+				continue
+			}
+			rel := toRel(root, fname)
 			for _, decl := range file.Decls {
 				fd, ok := decl.(*ast.FuncDecl)
 				if !ok || fd.Body == nil {
