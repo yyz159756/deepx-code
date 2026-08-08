@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -140,7 +141,7 @@ func TestFailureID_SuccessClears(t *testing.T) {
 }
 
 
-// 跨 StartStream(不同 tracker 实例)失败 ID 也不重复(进程级原子计数器,会话级唯一)。
+// 跨 StartStream(不同 tracker 实例)失败 ID 也不重复(进程内原子计数器,会话级唯一)。
 func TestFailureID_UniqueAcrossTrackers(t *testing.T) {
 	tc := failureToolCall("Update", `{"path":"e.go","old_string":"旧","new_string":"新"}`)
 	res := tools.ToolResult{Output: "未找到", Success: false, FailureCategory: tools.FailureCategoryNotFound}
@@ -156,5 +157,31 @@ func TestFailureID_UniqueAcrossTrackers(t *testing.T) {
 	}
 	if idA == idB {
 		t.Fatalf("跨 stream 失败 ID 不应重复: %q == %q", idA, idB)
+	}
+}
+
+// 跨进程唯一性:FailureID 含进程随机前缀(重启后新进程前缀不同,不会与旧进程/
+// 持久化错误日志中的 ID 撞车);格式 f_<prefix>_<seq>,前缀 8 hex。
+func TestFailureID_HasProcessPrefix(t *testing.T) {
+	tc := failureToolCall("Update", `{"path":"e.go","old_string":"旧","new_string":"新"}`)
+	res := tools.ToolResult{Output: "未找到", Success: false, FailureCategory: tools.FailureCategoryNotFound}
+	ft := newFailureTracker()
+	_, id, _ := handleToolFailure(tc, res, ft)
+
+	// 格式 f_<8hex>_<seq>
+	if !regexp.MustCompile(`^f_[0-9a-f]{8}_\d{3}$`).MatchString(id) {
+		t.Fatalf("FailureID 应含 8 hex 进程前缀: %q", id)
+	}
+	// 进程内所有 ID 共享同一前缀(前缀只生成一次)
+	if failureIDPrefix == "" || len(failureIDPrefix) != 8 {
+		t.Fatalf("进程前缀应为 8 hex,got %q", failureIDPrefix)
+	}
+	// 前缀稳定:同进程第二次失败 ID 前缀相同、序列递增
+	_, id2, _ := handleToolFailure(tc, res, ft)
+	if !strings.HasPrefix(id2, "f_"+failureIDPrefix+"_") {
+		t.Fatalf("同进程 ID 应共享前缀: %q vs prefix %q", id2, failureIDPrefix)
+	}
+	if id == id2 {
+		t.Fatalf("同进程连续失败 ID 不应重复: %q", id)
 	}
 }

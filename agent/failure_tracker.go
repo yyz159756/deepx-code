@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,10 +37,19 @@ type failureTracker struct {
 	ids       map[string]string // fingerprint → 最近一次失败的 FailureID(事件身份,每次失败新 ID)
 }
 
-// failureIDSeq 是进程级单调递增的 FailureID 计数器:跨 StartStream/跨轮唯一。
-// 会话级事件身份 —— 同一次 agent 运行内任何失败 ID 不重复(重启后新会话从新序列开始,
-// 旧会话历史里的 ID 只存在于旧文本,与当前 UI 无冲突)。
+// failureIDSeq 是进程内单调递增的 FailureID 序列。
+// 跨进程唯一靠 failureIDPrefix(启动时随机):重启后新前缀,不会与旧进程/
+// 持久化错误日志(errors-*.log)中的 ID 撞车——UI/日志可精确引用某次失败事件。
 var failureIDSeq atomic.Int64
+
+// failureIDPrefix 进程启动时生成一次(8 hex)。4 字节随机,碰撞概率 ~1/2^32/进程。
+var failureIDPrefix = func() string {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "00000000" // 极端兜底(不影响唯一性保证,序列仍进程内唯一)
+	}
+	return hex.EncodeToString(b)
+}()
 
 func newFailureTracker() *failureTracker {
 	return &failureTracker{
@@ -112,10 +123,10 @@ func (ft *failureTracker) clearByTool(tc ToolCall) {
 }
 
 // bump 自增指纹失败计数并返回当前值;同时为本次失败事件生成新 FailureID(每次失败一个新事件,
-// 进程级唯一,跨 StartStream 不重复)。
+// 进程内唯一 + 进程前缀,跨 StartStream 与跨进程都不重复)。
 func (ft *failureTracker) bump(fp string) int {
 	ft.counts[fp]++
-	ft.ids[fp] = fmt.Sprintf("f_%03d", failureIDSeq.Add(1))
+	ft.ids[fp] = fmt.Sprintf("f_%s_%03d", failureIDPrefix, failureIDSeq.Add(1))
 	return ft.counts[fp]
 }
 
