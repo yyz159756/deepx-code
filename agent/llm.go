@@ -106,7 +106,7 @@ type ToolCallResultMsg struct { // 工具调用返回
 	Name    string
 	Output  string
 	Success bool
-	// FailureID 失败事件的唯一身份(stream 局部递增,如 f_001);成功时为空。
+	// FailureID 失败事件的唯一身份(格式 f_<进程前缀>_<seq>,进程内递增 + 随机前缀,跨进程不重复);成功时为空。
 	// 供 UI/debug 引用某次具体失败,不进模型上下文(模型不消费)。
 	FailureID string
 }
