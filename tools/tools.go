@@ -185,6 +185,7 @@ var Tools = []Tool{
 			Type: "object",
 			Properties: map[string]PropDef{
 				"op":    {Type: "string", Enum: []string{"symbols", "def", "refs", "callers", "callees", "implementers", "subtypes", "supertypes", "impact", "imports", "outline", "reindex"}, Description: "操作类型"},
+				"root":  {Type: "string", Description: "可选:指定项目根(绝对路径)建图查询,缺省用当前 workspace 根。多项目 workspace(如 workspace 是多个项目的父目录)下用它对单个项目建图,此时 path 参数相对该 root;不传则在 workspace 根上查(多项目时可能不全,输出会带警告)"},
 				"name":  {Type: "string", Description: "符号名;def/refs/callers/callees/implementers/subtypes/supertypes/impact 必填,支持 \"Type.Method\" 限定名;symbols 作模糊过滤"},
 				"path":  {Type: "string", Description: "outline/imports 用:相对 workspace 的文件路径"},
 				"kind":  {Type: "string", Enum: []string{"func", "method", "type", "var", "const", "field"}, Description: "可选,按符号种类过滤"},
@@ -344,7 +345,8 @@ var Tools = []Tool{
 			"污染退出码导致的'git 成功却误报失败')。\n" +
 			"**git 操作(commit/branch/merge/push/log/diff/status 等)优先用本工具,不要用 Bash 拼 git 命令**。" +
 			"命令通过 args 数组传参(无引号转义问题),cwd 指定仓库目录。\n" +
-			"exit code 语义:0 = 成功;1 = 正常结果(如 diff 有差异,非失败);≥2 = 失败(诊断保留在输出)。",
+			"exit code 语义:0 = 成功;1 = **查询类命令**(diff/grep/log/show/status 等)的正常结果(有差异/无匹配,非失败)," +
+			"**操作类命令**(checkout/merge/reset/apply 等)exit 1 = 操作失败;≥2 = 失败(诊断保留在输出)。",
 		Parameters: ToolParam{
 			Type: "object",
 			Properties: map[string]PropDef{
