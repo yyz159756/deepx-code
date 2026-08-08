@@ -297,6 +297,7 @@ var Tools = []Tool{
 		Name: "Bash",
 		Description: "在 shell 中执行命令并返回 stdout/stderr。可指定 cwd 与超时秒数(默认 60)。" +
 			"\n**优先 Python 工具**:执行 Python 代码 / 文本处理 / 数据计算,或命令涉及引号、中文、管道、删除时,优先用 Python 工具(代码经 stdin 不经 shell,引号原样),不要先用 Bash 报错再换。" +
+			"\n**优先 Git 工具**:git 操作(尤其复杂参数 / 引号)优先用 Git 工具 —— args 数组传参不经 shell,无转义坑;exit code 按命令语义区分。" +
 			"\nWrite/Update 因目标在 workspace 外被拒时,由用户确认或自行处理,不要自作主张绕过。" +
 			"\n\n**常驻进程**(开发服务器 / watch / daemon,如 npm run dev、vite、python -m http.server、tail -f)" +
 			"不会主动退出 —— 默认(前台)调用会一直阻塞到 timeout 才返回,并把子进程甩成孤儿。" +
