@@ -24,6 +24,11 @@ const (
 // token 稳定、缓存友好、测试易写、后续 diff 明确。成功结果不走此协议。
 func RenderToolFailureProtocol(r tools.ToolResult) string {
 	summary := truncateUTF8(r.Error, failureSummaryMaxLen)
+	// 旧工具(NormalizeToolResult 复制 Error=Output)summary 与 diagnostic 完全重复——
+	// 占位避免 200 字 token 浪费;Error 非空且与 Output 不同才显示摘要。
+	if r.Error != "" && r.Error == r.Output {
+		summary = "—(同诊断,见下)"
+	}
 	action := string(GetRecoveryAction(r.FailureCategory))
 	if action == "" {
 		action = string(RecoveryAbort)

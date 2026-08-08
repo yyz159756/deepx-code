@@ -31,8 +31,8 @@ func TestExecuteTool_PlanModeAllowsReads(t *testing.T) {
 }
 
 func TestBlockedInPlan(t *testing.T) {
-	blocked := map[string]bool{"Write": true, "Update": true, "Bash": true, "Python": true}
-	for _, name := range []string{"Write", "Update", "Bash", "Python", "Read", "Grep", "List", "OCR", "Glob"} {
+	blocked := map[string]bool{"Write": true, "Update": true, "Bash": true, "Python": true, "Git": true}
+	for _, name := range []string{"Write", "Update", "Bash", "Python", "Git", "Read", "Grep", "List", "OCR", "Glob"} {
 		if got := blockedInPlan(name); got != blocked[name] {
 			t.Errorf("blockedInPlan(%q) = %v, 期望 %v", name, got, blocked[name])
 		}
@@ -41,8 +41,8 @@ func TestBlockedInPlan(t *testing.T) {
 
 func TestIsReviewable(t *testing.T) {
 	// 能执行任意代码/写文件的工具,review 模式下必须人工确认;只读工具不需要。
-	reviewable := map[string]bool{"Write": true, "Update": true, "Bash": true, "Python": true}
-	for _, name := range []string{"Write", "Update", "Bash", "Python", "Read", "Grep", "List", "OCR", "Glob"} {
+	reviewable := map[string]bool{"Write": true, "Update": true, "Bash": true, "Python": true, "Git": true}
+	for _, name := range []string{"Write", "Update", "Bash", "Python", "Git", "Read", "Grep", "List", "OCR", "Glob"} {
 		if got := isReviewable(name); got != reviewable[name] {
 			t.Errorf("isReviewable(%q) = %v, 期望 %v", name, got, reviewable[name])
 		}

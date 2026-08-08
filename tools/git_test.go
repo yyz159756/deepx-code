@@ -90,6 +90,42 @@ func TestGit_DiffExit1IsSuccess(t *testing.T) {
 	}
 }
 
+// 操作类命令(git checkout 不存在的分支)exit 1 = 操作失败,必须 Success=false
+// (git 对"目标不存在"也返回 1,统一当成功会吞掉真实错误)。
+func TestGit_CheckoutExit1IsFailure(t *testing.T) {
+	dir := newTestRepo(t)
+	r := Git(map[string]any{"args": []any{"checkout", "nonexistent-branch"}, "cwd": dir})
+	if r.Success {
+		t.Fatalf("checkout 不存在的分支(exit 1)应失败,got Success=%v Output=%q", r.Success, r.Output)
+	}
+	if !strings.Contains(r.Output, "did not match") && !strings.Contains(r.Output, "error: pathspec") {
+		t.Fatalf("checkout 失败应带诊断,got %q", r.Output)
+	}
+}
+
+// 查询类 exit 1 = 正常;操作类 exit 1 = 失败(纯函数单测)。
+func TestGitExit1IsNormal(t *testing.T) {
+	cases := []struct {
+		argv []string
+		want bool
+	}{
+		{[]string{"diff", "--exit-code"}, true},
+		{[]string{"grep", "x"}, true},
+		{[]string{"log", "--oneline"}, true},
+		{[]string{"status", "--short"}, true},
+		{[]string{"-C", "/tmp", "diff", "--exit-code"}, true},  // 跳过全局选项
+		{[]string{"checkout", "foo"}, false},
+		{[]string{"merge", "foo"}, false},
+		{[]string{"reset", "--hard"}, false},
+		{[]string{"apply", "p.patch"}, false},
+	}
+	for _, c := range cases {
+		if got := gitExit1IsNormal(c.argv); got != c.want {
+			t.Errorf("gitExit1IsNormal(%v) = %v, want %v", c.argv, got, c.want)
+		}
+	}
+}
+
 // 非 git 目录 → git exit 128 → 失败 + 诊断保留。
 func TestGit_NotARepositoryFails(t *testing.T) {
 	dir := t.TempDir() // 非 git 仓库
@@ -113,7 +149,7 @@ func TestGit_EmptyArgs(t *testing.T) {
 // git 可执行文件不存在(exec.ErrNotFound,非 ExitError):真实错误必须进诊断,
 // 否则模型只看到 "[exit] ?" 无从判断原因 —— 失败恢复协议失去诊断基础。
 func TestGit_ExecutableNotFound(t *testing.T) {
-	r := formatGitResult("", "", &exec.Error{Name: "git", Err: errors.New("executable file not found in %PATH%")})
+	r := formatGitResult("", "", &exec.Error{Name: "git", Err: errors.New("executable file not found in %PATH%")}, nil)
 	if r.Success {
 		t.Fatal("git 缺失应失败")
 	}

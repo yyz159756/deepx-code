@@ -1703,14 +1703,15 @@ func allowedInMode(_ tools.Tool, _ AgentMode) bool {
 
 // isReviewable 判断工具在 review 模式下是否需要人工审核。
 func isReviewable(name string) bool {
-	return name == "Write" || name == "Update" || name == "Bash" || name == "Python"
+	return name == "Write" || name == "Update" || name == "Bash" || name == "Python" || name == "Git"
 }
 
 // blockedInPlan 判断工具在 plan 模式下是否被禁止执行(只读规划,禁一切写/副作用操作)。
 // plan 模式不裁剪工具表(保持 prefix cache 稳定),全靠 system prompt 让 LLM 自觉;
-// 这里是执行层的硬兜底:模型不听话直接调 Write/Update/Bash/Python 时(issue #108),拦下来。
+// 这里是执行层的硬兜底:模型不听话直接调 Write/Update/Bash/Python/Git 时(issue #108),拦下来。
+// Git 含破坏性写命令(commit/push/reset --hard/checkout),与 Bash 同级全拦。
 func blockedInPlan(name string) bool {
-	return name == "Write" || name == "Update" || name == "Bash" || name == "Python"
+	return name == "Write" || name == "Update" || name == "Bash" || name == "Python" || name == "Git"
 }
 
 // fileToolNames 是用于维护 lastFile(模型当前正在编辑的文件)的工具,给 Update 漏 path 时兜底。
